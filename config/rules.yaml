@@ -1,3 +1,19 @@
+- id: weekend_no_trade
+  priority: 130
+  when:
+    weekday:
+      - SAT
+      - SUN
+  day_color: RED
+  tradable: no_trade
+  reason: Weekend. Markets closed for this playbook.
+  session_colors:
+    London: RED
+    PreMarket: RED
+    NY_AM: RED
+    Lunch: RED
+    NY_PM: RED
+
 - id: nfp_week_thursday
   priority: 120
   when:
@@ -197,4 +213,3 @@
     NY_AM: GREEN
     Lunch: GREEN
     NY_PM: GREEN
-

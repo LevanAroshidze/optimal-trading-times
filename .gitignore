@@ -1,0 +1,7 @@
+__pycache__/
+.pytest_cache/
+.venv/
+venv/
+.env
+*.pyc
+Git-2.53.0.2-64-bit.exe

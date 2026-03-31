@@ -19,13 +19,15 @@ async def _run_once() -> None:
         level=logging.INFO,
         format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
     )
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
 
     root = Path(__file__).resolve().parent.parent
     app_config = load_app_config(root / "config" / "app.yaml")
     aliases = load_event_aliases(root / "config" / "event_aliases.yaml")
     rules = load_rules(root / "config" / "rules.yaml")
 
-    webhook_url = os.getenv(app_config.delivery.webhook_url_env)
+    webhook_url = os.getenv(app_config.delivery.webhook_url_env, "").strip()
     if not webhook_url:
         raise RuntimeError(
             f"Missing required environment variable: {app_config.delivery.webhook_url_env}"
@@ -46,6 +48,7 @@ async def _run_once() -> None:
         feature_builder=feature_builder,
         rule_engine=rule_engine,
         market_timezone=app_config.calendar.market_timezone,
+        decision_timezone=app_config.schedule.timezone,
     )
     sender = DiscordWebhookSender(
         webhook_url=webhook_url,

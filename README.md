@@ -70,6 +70,8 @@ python -m bot.main
 ## Notes
 
 - `schedule` in `config/app.yaml` documents your intended posting time
+- The run uses the `schedule.timezone` date when deciding what counts as `today`, so `08:00` or `09:00 Asia/Tbilisi` stays aligned with your Georgia-day announcement
 - Calendar logic uses `America/New_York`
 - If calendar data cannot be loaded, the announcer fails safe with `No trade today. Calendar unavailable.`
+- Default rules include an explicit weekend no-trade guard
 - The core rule engine is still separated from delivery, so you can add a full Discord bot later without rewriting the calendar logic

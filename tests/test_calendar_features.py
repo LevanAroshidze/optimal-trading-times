@@ -1,6 +1,8 @@
 from datetime import date, datetime
+import asyncio
 
 from bot.calendar_features import CalendarFeatureBuilder
+from bot.calendar_source import ForexFactoryCalendarSource
 from bot.config import EventAliasConfig
 from bot.models import CalendarEvent
 
@@ -70,3 +72,42 @@ def test_calendar_feature_builder_ignores_non_usd_cpi_for_us_rules():
 
     features = builder.build_for_date(date(2026, 4, 1), events)
     assert features["days_before_cpi"] is None
+
+
+def test_calendar_source_skips_malformed_items():
+    class StubSource(ForexFactoryCalendarSource):
+        async def _fetch_all(self, client):
+            return [
+                [
+                    {
+                        "title": "CPI m/m",
+                        "country": "USD",
+                        "date": "2026-04-02T08:30:00-04:00",
+                        "impact": "High",
+                    },
+                    {
+                        "title": "",
+                        "country": "USD",
+                        "date": "2026-04-02T08:30:00-04:00",
+                        "impact": "High",
+                    },
+                    {
+                        "title": "Bad Date",
+                        "country": "USD",
+                        "date": "not-a-date",
+                        "impact": "High",
+                    },
+                    {
+                        "title": "Naive Date",
+                        "country": "USD",
+                        "date": "2026-04-02T08:30:00",
+                        "impact": "High",
+                    },
+                ]
+            ]
+
+    source = StubSource(urls=["https://example.com/calendar.json"])
+    events = asyncio.run(source.fetch_events())
+
+    assert len(events) == 1
+    assert events[0].title == "CPI m/m"

@@ -43,8 +43,19 @@ class RuleEngine:
         return True
 
     def _matches_operator(self, expected: dict[str, Any], actual: Any) -> bool:
+        allowed = {"equals", "gte", "lte", "contains"}
+        unknown = set(expected) - allowed
+        if unknown:
+            raise ValueError(f"Unsupported rule operator(s): {', '.join(sorted(unknown))}")
+
         if "equals" in expected:
+            if len(expected) > 1:
+                raise ValueError("'equals' cannot be combined with other operators.")
             return actual == expected["equals"]
+
+        if "contains" in expected and len(expected) > 1:
+            raise ValueError("'contains' cannot be combined with other operators.")
+
         if actual is None:
             return False
         if "gte" in expected and actual < expected["gte"]:
@@ -53,4 +64,7 @@ class RuleEngine:
             return False
         if "contains" in expected:
             return isinstance(actual, list) and expected["contains"] in actual
+
+        if not expected:
+            raise ValueError("Operator block cannot be empty.")
         return True

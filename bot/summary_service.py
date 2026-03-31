@@ -16,11 +16,13 @@ class DailySummaryService:
         feature_builder: CalendarFeatureBuilder,
         rule_engine: RuleEngine,
         market_timezone: str,
+        decision_timezone: str,
     ) -> None:
         self.source = source
         self.feature_builder = feature_builder
         self.rule_engine = rule_engine
         self.market_tz = ZoneInfo(market_timezone)
+        self.decision_tz = ZoneInfo(decision_timezone)
         self.cached_events: list[CalendarEvent] = []
         self.last_refresh_at: datetime | None = None
 
@@ -31,7 +33,7 @@ class DailySummaryService:
         return events
 
     async def build_decision_for_today(self) -> DailyDecision:
-        target_date = datetime.now(tz=self.market_tz).date()
+        target_date = datetime.now(tz=self.decision_tz).date()
 
         try:
             events = await self.refresh_events()
@@ -56,4 +58,3 @@ class DailySummaryService:
             matched_conditions=decision.matched_conditions,
             source_status=source_status,
         )
-

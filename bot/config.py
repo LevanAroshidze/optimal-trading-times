@@ -47,14 +47,21 @@ def _load_yaml(path: Path) -> Any:
 
 def load_app_config(path: Path) -> AppConfig:
     raw = _load_yaml(path)
+    hour = int(raw["schedule"]["hour"])
+    minute = int(raw["schedule"]["minute"])
+    if not 0 <= hour <= 23:
+        raise ValueError("schedule.hour must be between 0 and 23")
+    if not 0 <= minute <= 59:
+        raise ValueError("schedule.minute must be between 0 and 59")
+
     return AppConfig(
         delivery=DeliveryConfig(
             webhook_url_env=raw["delivery"]["webhook_url_env"],
         ),
         schedule=ScheduleConfig(
             timezone=raw["schedule"]["timezone"],
-            hour=int(raw["schedule"]["hour"]),
-            minute=int(raw["schedule"]["minute"]),
+            hour=hour,
+            minute=minute,
         ),
         calendar=CalendarConfig(
             urls=list(raw["calendar"]["urls"]),
@@ -75,6 +82,9 @@ def load_event_aliases(path: Path) -> EventAliasConfig:
 
 def load_rules(path: Path) -> list[RuleDefinition]:
     raw_rules = _load_yaml(path)
+    if not isinstance(raw_rules, list) or not raw_rules:
+        raise ValueError("rules.yaml must contain a non-empty list of rules")
+
     rules: list[RuleDefinition] = []
     for item in raw_rules:
         session_colors = {
@@ -94,4 +104,7 @@ def load_rules(path: Path) -> list[RuleDefinition]:
                 reason=item["reason"],
             )
         )
-    return sorted(rules, key=lambda rule: rule.priority, reverse=True)
+    ordered_rules = sorted(rules, key=lambda rule: rule.priority, reverse=True)
+    if not any(not rule.when for rule in ordered_rules):
+        raise ValueError("rules.yaml must include a fallback rule with an empty 'when' block")
+    return ordered_rules

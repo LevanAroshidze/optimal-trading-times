@@ -12,5 +12,13 @@ class DiscordWebhookSender:
         payload = {"content": content}
         timeout = httpx.Timeout(self.timeout_seconds)
         async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(self.webhook_url, json=payload)
-            response.raise_for_status()
+            try:
+                response = await client.post(self.webhook_url, json=payload)
+                response.raise_for_status()
+            except httpx.HTTPStatusError as error:
+                status_code = error.response.status_code
+                raise RuntimeError(
+                    f"Discord webhook rejected the message with status {status_code}."
+                ) from None
+            except httpx.HTTPError:
+                raise RuntimeError("Failed to send Discord webhook message.") from None
