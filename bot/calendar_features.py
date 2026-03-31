@@ -49,6 +49,7 @@ class CalendarFeatureBuilder:
             "days_before_ppi": self._days_until_category(target_date, week_events, "PPI"),
             "has_cpi_today": self._has_category_on_date(target_date, week_events, "CPI"),
             "has_ppi_today": self._has_category_on_date(target_date, week_events, "PPI"),
+            "has_bank_holiday_today": self._has_bank_holiday_today(today_events),
             "has_830_red_news": self._has_830_red_news(today_events),
             "has_powell_10am_today": self._has_time_sensitive_category(
                 today_events, "POWELL", 10, 0
@@ -122,6 +123,14 @@ class CalendarFeatureBuilder:
             and match.event.impact.casefold() == "high"
             and match.event.starts_at.hour == 8
             and match.event.starts_at.minute == 30
+            for match in today_events
+        )
+
+    def _has_bank_holiday_today(self, today_events: list[EventCategoryMatch]) -> bool:
+        return any(
+            match.event.country == "USD"
+            and match.event.impact.casefold() == "holiday"
+            and "bank holiday" in match.event.title.casefold()
             for match in today_events
         )
 

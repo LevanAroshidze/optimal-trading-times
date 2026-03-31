@@ -57,6 +57,15 @@ def test_rule_engine_prefers_highest_priority(tmp_path):
     assert decision.rule_id == "high"
     assert decision.day_color == DayColor.RED
     assert decision.tradable == TradableStatus.NO_TRADE
+    assert decision.blocked_sessions == [
+        "London",
+        "PreMarket",
+        "NY_AM_FIRST_HALF",
+        "NY_AM_SECOND_HALF",
+        "Lunch",
+        "NY_PM_FIRST_HALF",
+        "NY_PM_SECOND_HALF",
+    ]
 
 
 def test_rule_engine_matches_weekend_list_condition(tmp_path):

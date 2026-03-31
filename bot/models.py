@@ -21,18 +21,33 @@ class TradableStatus(StrEnum):
 class SessionName(StrEnum):
     LONDON = "London"
     PREMARKET = "PreMarket"
-    NY_AM = "NY_AM"
+    NY_AM_FIRST_HALF = "NY_AM_FIRST_HALF"
+    NY_AM_SECOND_HALF = "NY_AM_SECOND_HALF"
     LUNCH = "Lunch"
-    NY_PM = "NY_PM"
+    NY_PM_FIRST_HALF = "NY_PM_FIRST_HALF"
+    NY_PM_SECOND_HALF = "NY_PM_SECOND_HALF"
 
 
 SESSION_ORDER = [
     SessionName.LONDON.value,
     SessionName.PREMARKET.value,
-    SessionName.NY_AM.value,
+    SessionName.NY_AM_FIRST_HALF.value,
+    SessionName.NY_AM_SECOND_HALF.value,
     SessionName.LUNCH.value,
-    SessionName.NY_PM.value,
+    SessionName.NY_PM_FIRST_HALF.value,
+    SessionName.NY_PM_SECOND_HALF.value,
 ]
+
+
+SESSION_LABELS = {
+    SessionName.LONDON.value: "London",
+    SessionName.PREMARKET.value: "PreMarket",
+    SessionName.NY_AM_FIRST_HALF.value: "NY AM (First Half)",
+    SessionName.NY_AM_SECOND_HALF.value: "NY AM (Second Half)",
+    SessionName.LUNCH.value: "Lunch",
+    SessionName.NY_PM_FIRST_HALF.value: "NY PM (First Half)",
+    SessionName.NY_PM_SECOND_HALF.value: "NY PM (Second Half)",
+}
 
 
 @dataclass(frozen=True)
@@ -102,4 +117,3 @@ class DailyDecision:
             reason="Calendar unavailable.",
             source_status="unavailable",
         )
-

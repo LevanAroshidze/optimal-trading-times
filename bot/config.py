@@ -87,10 +87,10 @@ def load_rules(path: Path) -> list[RuleDefinition]:
 
     rules: list[RuleDefinition] = []
     for item in raw_rules:
-        session_colors = {
+        session_colors = _normalize_session_colors({
             session: DayColor(color)
             for session, color in item["session_colors"].items()
-        }
+        })
         for session_name in SessionName:
             session_colors.setdefault(session_name.value, DayColor.WHITE)
         rules.append(
@@ -108,3 +108,17 @@ def load_rules(path: Path) -> list[RuleDefinition]:
     if not any(not rule.when for rule in ordered_rules):
         raise ValueError("rules.yaml must include a fallback rule with an empty 'when' block")
     return ordered_rules
+
+
+def _normalize_session_colors(
+    session_colors: dict[str, DayColor],
+) -> dict[str, DayColor]:
+    ny_am_color = session_colors.pop("NY_AM", None)
+    if ny_am_color is not None:
+        session_colors.setdefault(SessionName.NY_AM_FIRST_HALF.value, ny_am_color)
+        session_colors.setdefault(SessionName.NY_AM_SECOND_HALF.value, ny_am_color)
+    ny_pm_color = session_colors.pop("NY_PM", None)
+    if ny_pm_color is not None:
+        session_colors.setdefault(SessionName.NY_PM_FIRST_HALF.value, ny_pm_color)
+        session_colors.setdefault(SessionName.NY_PM_SECOND_HALF.value, ny_pm_color)
+    return session_colors

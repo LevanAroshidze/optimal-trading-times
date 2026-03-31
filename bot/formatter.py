@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from bot.models import DailyDecision, DayColor, TradableStatus
+from bot.models import DailyDecision, DayColor, SESSION_LABELS, TradableStatus
 
 
 class DiscordFormatter:
@@ -28,7 +28,7 @@ class DiscordFormatter:
         return "Trade allowed today."
 
     def _join_sessions(self, sessions: list[str]) -> str:
-        if len(sessions) == 1:
-            return sessions[0]
-        return ", ".join(sessions[:-1]) + f" and {sessions[-1]}"
-
+        labels = [SESSION_LABELS.get(session, session) for session in sessions]
+        if len(labels) == 1:
+            return labels[0]
+        return ", ".join(labels[:-1]) + f" and {labels[-1]}"

@@ -10,9 +10,27 @@
   session_colors:
     London: RED
     PreMarket: RED
-    NY_AM: RED
+    NY_AM_FIRST_HALF: RED
+    NY_AM_SECOND_HALF: RED
     Lunch: RED
-    NY_PM: RED
+    NY_PM_FIRST_HALF: RED
+    NY_PM_SECOND_HALF: RED
+
+- id: bank_holiday_no_trade
+  priority: 125
+  when:
+    has_bank_holiday_today: true
+  day_color: RED
+  tradable: no_trade
+  reason: USD bank holiday.
+  session_colors:
+    London: RED
+    PreMarket: RED
+    NY_AM_FIRST_HALF: RED
+    NY_AM_SECOND_HALF: RED
+    Lunch: RED
+    NY_PM_FIRST_HALF: RED
+    NY_PM_SECOND_HALF: RED
 
 - id: nfp_week_thursday
   priority: 120
@@ -25,9 +43,11 @@
   session_colors:
     London: RED
     PreMarket: RED
-    NY_AM: RED
+    NY_AM_FIRST_HALF: RED
+    NY_AM_SECOND_HALF: RED
     Lunch: RED
-    NY_PM: RED
+    NY_PM_FIRST_HALF: RED
+    NY_PM_SECOND_HALF: RED
 
 - id: nfp_week_friday
   priority: 115
@@ -40,9 +60,11 @@
   session_colors:
     London: RED
     PreMarket: RED
-    NY_AM: WHITE
+    NY_AM_FIRST_HALF: WHITE
+    NY_AM_SECOND_HALF: GREEN
     Lunch: GREEN
-    NY_PM: GREEN
+    NY_PM_FIRST_HALF: GREEN
+    NY_PM_SECOND_HALF: GREEN
 
 - id: nfp_week_wednesday
   priority: 110
@@ -55,9 +77,11 @@
   session_colors:
     London: GREEN
     PreMarket: GREEN
-    NY_AM: WHITE
+    NY_AM_FIRST_HALF: GREEN
+    NY_AM_SECOND_HALF: WHITE
     Lunch: RED
-    NY_PM: RED
+    NY_PM_FIRST_HALF: RED
+    NY_PM_SECOND_HALF: RED
 
 - id: nfp_week_tuesday
   priority: 105
@@ -70,9 +94,11 @@
   session_colors:
     London: GREEN
     PreMarket: GREEN
-    NY_AM: GREEN
+    NY_AM_FIRST_HALF: GREEN
+    NY_AM_SECOND_HALF: GREEN
     Lunch: GREEN
-    NY_PM: GREEN
+    NY_PM_FIRST_HALF: GREEN
+    NY_PM_SECOND_HALF: GREEN
 
 - id: nfp_week_monday
   priority: 100
@@ -85,9 +111,11 @@
   session_colors:
     London: GREEN
     PreMarket: GREEN
-    NY_AM: WHITE
+    NY_AM_FIRST_HALF: WHITE
+    NY_AM_SECOND_HALF: WHITE
     Lunch: GREEN
-    NY_PM: GREEN
+    NY_PM_FIRST_HALF: GREEN
+    NY_PM_SECOND_HALF: GREEN
 
 - id: cpi_day
   priority: 95
@@ -99,9 +127,11 @@
   session_colors:
     London: RED
     PreMarket: RED
-    NY_AM: WHITE
+    NY_AM_FIRST_HALF: WHITE
+    NY_AM_SECOND_HALF: GREEN
     Lunch: GREEN
-    NY_PM: GREEN
+    NY_PM_FIRST_HALF: GREEN
+    NY_PM_SECOND_HALF: GREEN
 
 - id: ppi_day
   priority: 94
@@ -113,9 +143,11 @@
   session_colors:
     London: RED
     PreMarket: RED
-    NY_AM: WHITE
+    NY_AM_FIRST_HALF: WHITE
+    NY_AM_SECOND_HALF: GREEN
     Lunch: GREEN
-    NY_PM: GREEN
+    NY_PM_FIRST_HALF: GREEN
+    NY_PM_SECOND_HALF: GREEN
 
 - id: cpi_minus_1
   priority: 93
@@ -127,9 +159,11 @@
   session_colors:
     London: GREEN
     PreMarket: GREEN
-    NY_AM: RED
+    NY_AM_FIRST_HALF: RED
+    NY_AM_SECOND_HALF: RED
     Lunch: GREEN
-    NY_PM: RED
+    NY_PM_FIRST_HALF: RED
+    NY_PM_SECOND_HALF: RED
 
 - id: cpi_minus_2
   priority: 92
@@ -141,9 +175,11 @@
   session_colors:
     London: WHITE
     PreMarket: WHITE
-    NY_AM: WHITE
+    NY_AM_FIRST_HALF: WHITE
+    NY_AM_SECOND_HALF: WHITE
     Lunch: WHITE
-    NY_PM: WHITE
+    NY_PM_FIRST_HALF: WHITE
+    NY_PM_SECOND_HALF: WHITE
 
 - id: powell_10am_previous_day
   priority: 85
@@ -155,9 +191,11 @@
   session_colors:
     London: WHITE
     PreMarket: WHITE
-    NY_AM: WHITE
+    NY_AM_FIRST_HALF: WHITE
+    NY_AM_SECOND_HALF: WHITE
     Lunch: WHITE
-    NY_PM: RED
+    NY_PM_FIRST_HALF: RED
+    NY_PM_SECOND_HALF: RED
 
 - id: powell_10am_today
   priority: 84
@@ -169,9 +207,11 @@
   session_colors:
     London: RED
     PreMarket: RED
-    NY_AM: WHITE
+    NY_AM_FIRST_HALF: RED
+    NY_AM_SECOND_HALF: GREEN
     Lunch: GREEN
-    NY_PM: GREEN
+    NY_PM_FIRST_HALF: GREEN
+    NY_PM_SECOND_HALF: GREEN
 
 - id: pm_red_news_today
   priority: 80
@@ -183,9 +223,11 @@
   session_colors:
     London: GREEN
     PreMarket: GREEN
-    NY_AM: RED
+    NY_AM_FIRST_HALF: RED
+    NY_AM_SECOND_HALF: RED
     Lunch: RED
-    NY_PM: GREEN
+    NY_PM_FIRST_HALF: RED
+    NY_PM_SECOND_HALF: GREEN
 
 - id: red_830_news_today
   priority: 70
@@ -197,9 +239,11 @@
   session_colors:
     London: WHITE
     PreMarket: RED
-    NY_AM: GREEN
+    NY_AM_FIRST_HALF: GREEN
+    NY_AM_SECOND_HALF: GREEN
     Lunch: GREEN
-    NY_PM: GREEN
+    NY_PM_FIRST_HALF: GREEN
+    NY_PM_SECOND_HALF: GREEN
 
 - id: default_green_day
   priority: 0
@@ -210,6 +254,8 @@
   session_colors:
     London: GREEN
     PreMarket: GREEN
-    NY_AM: GREEN
+    NY_AM_FIRST_HALF: GREEN
+    NY_AM_SECOND_HALF: GREEN
     Lunch: GREEN
-    NY_PM: GREEN
+    NY_PM_FIRST_HALF: GREEN
+    NY_PM_SECOND_HALF: GREEN

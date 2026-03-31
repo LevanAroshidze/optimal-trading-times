@@ -111,3 +111,43 @@ def test_calendar_source_skips_malformed_items():
 
     assert len(events) == 1
     assert events[0].title == "CPI m/m"
+
+
+def test_calendar_feature_builder_detects_usd_bank_holiday_only():
+    aliases = EventAliasConfig(title_aliases={})
+    builder = CalendarFeatureBuilder(aliases, "America/New_York")
+
+    events = [
+        CalendarEvent(
+            title="Bank Holiday",
+            country="USD",
+            impact="Holiday",
+            starts_at=datetime.fromisoformat("2026-04-02T08:30:00-04:00"),
+        ),
+        CalendarEvent(
+            title="Bank Holiday",
+            country="GBP",
+            impact="Holiday",
+            starts_at=datetime.fromisoformat("2026-04-02T08:30:00-04:00"),
+        ),
+    ]
+
+    features = builder.build_for_date(date(2026, 4, 2), events)
+    assert features["has_bank_holiday_today"] is True
+
+
+def test_calendar_feature_builder_ignores_non_usd_holiday_days():
+    aliases = EventAliasConfig(title_aliases={})
+    builder = CalendarFeatureBuilder(aliases, "America/New_York")
+
+    events = [
+        CalendarEvent(
+            title="Bank Holiday",
+            country="GBP",
+            impact="Holiday",
+            starts_at=datetime.fromisoformat("2026-04-02T08:30:00-04:00"),
+        )
+    ]
+
+    features = builder.build_for_date(date(2026, 4, 2), events)
+    assert features["has_bank_holiday_today"] is False
