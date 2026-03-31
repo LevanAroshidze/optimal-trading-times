@@ -1,0 +1,31 @@
+title_aliases:
+  NFP:
+    - non-farm employment change
+  CPI:
+    - cpi
+    - consumer price index
+  PPI:
+    - ppi
+    - producer price index
+  POWELL:
+    - fed chair powell speaks
+  POWELL_PM:
+    - fed chair powell speaks
+  FOMC:
+    - federal funds rate
+    - fomc statement
+    - fomc press conference
+  PM_RED:
+    - federal funds rate
+    - fomc statement
+    - fomc press conference
+    - fed chair powell speaks
+  RED_830AM:
+    - core retail sales
+    - retail sales
+    - unemployment claims
+    - pmi
+    - jolts job openings
+    - ism manufacturing pmi
+    - ism services pmi
+

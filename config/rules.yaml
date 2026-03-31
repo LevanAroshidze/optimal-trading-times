@@ -1,0 +1,200 @@
+- id: nfp_week_thursday
+  priority: 120
+  when:
+    week_type: NFP
+    weekday: THU
+  day_color: RED
+  tradable: no_trade
+  reason: NFP week Thursday.
+  session_colors:
+    London: RED
+    PreMarket: RED
+    NY_AM: RED
+    Lunch: RED
+    NY_PM: RED
+
+- id: nfp_week_friday
+  priority: 115
+  when:
+    week_type: NFP
+    weekday: FRI
+  day_color: WHITE
+  tradable: cautious
+  reason: NFP day. Let the release pass first.
+  session_colors:
+    London: RED
+    PreMarket: RED
+    NY_AM: WHITE
+    Lunch: GREEN
+    NY_PM: GREEN
+
+- id: nfp_week_wednesday
+  priority: 110
+  when:
+    week_type: NFP
+    weekday: WED
+  day_color: WHITE
+  tradable: cautious
+  reason: NFP week Wednesday.
+  session_colors:
+    London: GREEN
+    PreMarket: GREEN
+    NY_AM: WHITE
+    Lunch: RED
+    NY_PM: RED
+
+- id: nfp_week_tuesday
+  priority: 105
+  when:
+    week_type: NFP
+    weekday: TUE
+  day_color: GREEN
+  tradable: trade
+  reason: NFP week Tuesday.
+  session_colors:
+    London: GREEN
+    PreMarket: GREEN
+    NY_AM: GREEN
+    Lunch: GREEN
+    NY_PM: GREEN
+
+- id: nfp_week_monday
+  priority: 100
+  when:
+    week_type: NFP
+    weekday: MON
+  day_color: GREEN
+  tradable: trade
+  reason: NFP week Monday.
+  session_colors:
+    London: GREEN
+    PreMarket: GREEN
+    NY_AM: WHITE
+    Lunch: GREEN
+    NY_PM: GREEN
+
+- id: cpi_day
+  priority: 95
+  when:
+    has_cpi_today: true
+  day_color: WHITE
+  tradable: cautious
+  reason: CPI day.
+  session_colors:
+    London: RED
+    PreMarket: RED
+    NY_AM: WHITE
+    Lunch: GREEN
+    NY_PM: GREEN
+
+- id: ppi_day
+  priority: 94
+  when:
+    has_ppi_today: true
+  day_color: WHITE
+  tradable: cautious
+  reason: PPI day.
+  session_colors:
+    London: RED
+    PreMarket: RED
+    NY_AM: WHITE
+    Lunch: GREEN
+    NY_PM: GREEN
+
+- id: cpi_minus_1
+  priority: 93
+  when:
+    days_before_cpi: 1
+  day_color: WHITE
+  tradable: cautious
+  reason: 1 day before CPI. Avoid NY AM and NY PM.
+  session_colors:
+    London: GREEN
+    PreMarket: GREEN
+    NY_AM: RED
+    Lunch: GREEN
+    NY_PM: RED
+
+- id: cpi_minus_2
+  priority: 92
+  when:
+    days_before_cpi: 2
+  day_color: WHITE
+  tradable: cautious
+  reason: 2 days before CPI. Mid conditions.
+  session_colors:
+    London: WHITE
+    PreMarket: WHITE
+    NY_AM: WHITE
+    Lunch: WHITE
+    NY_PM: WHITE
+
+- id: powell_10am_previous_day
+  priority: 85
+  when:
+    days_until_powell_10am: 1
+  day_color: WHITE
+  tradable: cautious
+  reason: Powell speaks at 10am tomorrow.
+  session_colors:
+    London: WHITE
+    PreMarket: WHITE
+    NY_AM: WHITE
+    Lunch: WHITE
+    NY_PM: RED
+
+- id: powell_10am_today
+  priority: 84
+  when:
+    has_powell_10am_today: true
+  day_color: WHITE
+  tradable: cautious
+  reason: Powell speaks at 10am today.
+  session_colors:
+    London: RED
+    PreMarket: RED
+    NY_AM: WHITE
+    Lunch: GREEN
+    NY_PM: GREEN
+
+- id: pm_red_news_today
+  priority: 80
+  when:
+    has_pm_red_news: true
+  day_color: WHITE
+  tradable: cautious
+  reason: PM red-folder news today.
+  session_colors:
+    London: GREEN
+    PreMarket: GREEN
+    NY_AM: RED
+    Lunch: RED
+    NY_PM: GREEN
+
+- id: red_830_news_today
+  priority: 70
+  when:
+    has_830_red_news: true
+  day_color: WHITE
+  tradable: cautious
+  reason: 8:30am red-folder news today.
+  session_colors:
+    London: WHITE
+    PreMarket: RED
+    NY_AM: GREEN
+    Lunch: GREEN
+    NY_PM: GREEN
+
+- id: default_green_day
+  priority: 0
+  when: {}
+  day_color: GREEN
+  tradable: trade
+  reason: No blocking calendar condition.
+  session_colors:
+    London: GREEN
+    PreMarket: GREEN
+    NY_AM: GREEN
+    Lunch: GREEN
+    NY_PM: GREEN
+

@@ -1,0 +1,13 @@
+delivery:
+  webhook_url_env: DISCORD_WEBHOOK_URL
+
+schedule:
+  timezone: Asia/Tbilisi
+  hour: 9
+  minute: 0
+
+calendar:
+  urls:
+    - https://nfs.faireconomy.media/ff_calendar_thisweek.json
+  timeout_seconds: 10
+  market_timezone: America/New_York
