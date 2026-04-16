@@ -11,6 +11,14 @@ from bot.models import (
 
 
 class DiscordFormatter:
+    _VISIBLE_SESSIONS = {
+        SessionName.LONDON.value,
+        SessionName.NY_AM_FIRST_HALF.value,
+        SessionName.NY_AM_SECOND_HALF.value,
+        SessionName.NY_PM_FIRST_HALF.value,
+        SessionName.NY_PM_SECOND_HALF.value,
+    }
+
     def format_daily(self, outlook: DailyOutlook) -> str:
         parts = [self._headline(outlook.decision, outlook.summary_reason)]
         parts.extend(self._session_lines(outlook.decision))
@@ -96,8 +104,11 @@ class DiscordFormatter:
             ("Avoid", decision.blocked_sessions),
         )
         for label, sessions in session_groups:
-            if sessions:
-                lines.append(f"{label}: {self._join_sessions(sessions)}.")
+            visible_sessions = [
+                session for session in sessions if session in self._VISIBLE_SESSIONS
+            ]
+            if visible_sessions:
+                lines.append(f"{label}: {self._join_sessions(visible_sessions)}.")
         return lines
 
     def _join_sessions(self, sessions: list[str]) -> str:

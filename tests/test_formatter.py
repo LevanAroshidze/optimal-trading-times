@@ -33,9 +33,11 @@ def test_formatter_builds_trader_style_daily_message():
     message = DiscordFormatter().format_daily(make_outlook())
 
     assert "White day. CPI day." in message
-    assert "Focus: NY AM (Second Half), Lunch and NY PM." in message
+    assert "Focus: NY AM (Second Half) and NY PM." in message
     assert "Caution: NY AM (First Half)." in message
-    assert "Avoid: London and PreMarket." in message
+    assert "Avoid: London." in message
+    assert "PreMarket" not in message
+    assert "Lunch" not in message
     assert (
         "Strongest USD news: CPI at 8:30 AM NY time. "
         "Wait 15-30 minutes after the release before looking for trades."
@@ -63,9 +65,37 @@ def test_formatter_collapses_full_ny_am_and_ny_pm_sessions():
 
     message = DiscordFormatter().format_daily(outlook)
 
-    assert "Focus: London, PreMarket and NY AM." in message
+    assert "Focus: London and NY AM." in message
     assert "NY AM (First Half)" not in message
     assert "NY AM (Second Half)" not in message
+
+
+def test_formatter_hides_non_trading_sessions_entirely():
+    decision = DailyDecision(
+        rule_id="mixed_day",
+        target_date=date(2026, 4, 18),
+        day_color=DayColor.WHITE,
+        tradable=TradableStatus.CAUTION,
+        session_colors={
+            "London": DayColor.WHITE,
+            "PreMarket": DayColor.GREEN,
+            "NY_AM_FIRST_HALF": DayColor.RED,
+            "NY_AM_SECOND_HALF": DayColor.RED,
+            "Lunch": DayColor.RED,
+            "NY_PM_FIRST_HALF": DayColor.GREEN,
+            "NY_PM_SECOND_HALF": DayColor.GREEN,
+        },
+        reason="Mixed day.",
+    )
+    outlook = DailyOutlook(decision=decision, summary_reason="Mixed day.")
+
+    message = DiscordFormatter().format_daily(outlook)
+
+    assert "PreMarket" not in message
+    assert "Lunch" not in message
+    assert "Focus: NY PM." in message
+    assert "Caution: London." in message
+    assert "Avoid: NY AM." in message
 
 
 def test_formatter_builds_weekly_message():
