@@ -1,3 +1,18 @@
+strongest_categories:
+  - NFP
+  - CPI
+  - PPI
+  - FOMC
+  - POWELL
+
+partial_holiday_terms:
+  - early close
+  - early market close
+  - half day
+  - half-day
+  - early bond market close
+  - early stock market close
+
 title_aliases:
   NFP:
     - non-farm employment change
@@ -28,4 +43,3 @@ title_aliases:
     - jolts job openings
     - ism manufacturing pmi
     - ism services pmi
-

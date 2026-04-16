@@ -1,22 +1,31 @@
 # Optimal Trade Sessions Announcer
 
-Small Discord webhook announcer that checks the Forex Factory calendar once per day, applies your YAML rule matrix, and posts a short `trade / caution / no trade` summary.
+Discord webhook announcer that reads the Forex Factory calendar, applies the YAML trading matrix, and posts:
 
-## What v1 does
+- one morning daily outlook
+- one Sunday night weekly outlook
+- one same-day recheck update only if the calendar meaningfully changed
+
+The app stays calendar-first, USD-only, and session-based.
+
+## Current behavior
 
 - Pulls Forex Factory calendar events from JSON
-- Builds simple facts like `nfp_week`, `days_before_cpi`, `powell_10am_today`
-- Matches those facts against editable YAML rules
-- Posts one daily summary to Discord through a webhook
-- Runs as a one-shot script so it can be triggered by Railway Cron
+- Separates `Strongest USD news` from `Other red-folder USD news`
+- Applies your matrix rules from `config/rules.yaml`
+- Treats `no major USD news` days as their own white/caution model
+- Distinguishes full USD holidays from partial holiday / early-close days
+- Applies non-core red-news pressure to affected sessions conservatively
+- Suppresses duplicate posts across reruns by storing runtime state in `data/state.json`
+- Posts trader-style Discord messages through a webhook
 
-## What v1 does not do
+## What it does not do
 
 - No broker integration
 - No auto-trading
 - No chart scanning
 - No intraday buy/sell alerts
-- No slash commands in v1
+- No slash commands in this version
 
 ## Setup
 
@@ -48,7 +57,7 @@ $env:DISCORD_WEBHOOK_URL="https://discord.com/api/webhooks/..."
 - `config/event_aliases.yaml`
 - `config/rules.yaml`
 
-6. Run the announcer once:
+6. Run once locally:
 
 ```powershell
 python -m bot.main
@@ -56,22 +65,30 @@ python -m bot.main
 
 ## Railway cron
 
-- Deploy this repo to Railway
-- Set `DISCORD_WEBHOOK_URL` in Railway variables
-- Create a cron job that runs:
+Deploy this repo to Railway and set `DISCORD_WEBHOOK_URL` in Railway variables.
+
+This version is meant to run every 15 minutes and decide internally whether it is time to post. Use:
 
 ```bash
 python -m bot.main
 ```
 
-- For `09:00 Asia/Tbilisi`, use `0 5 * * *` in UTC
-- For `08:00 Asia/Tbilisi`, use `0 4 * * *` in UTC
+Recommended cron:
+
+```text
+*/15 * * * *
+```
+
+The app will internally gate these schedules:
+
+- Morning summary: `09:00 Asia/Tbilisi`
+- NY recheck: `08:00 America/New_York`
+- Weekly outlook: `21:00 Asia/Tbilisi` on Sunday
 
 ## Notes
 
-- `schedule` in `config/app.yaml` documents your intended posting time
-- The run uses the `schedule.timezone` date when deciding what counts as `today`, so `08:00` or `09:00 Asia/Tbilisi` stays aligned with your Georgia-day announcement
+- `config/app.yaml` defines the posting schedules and runtime state path
 - Calendar logic uses `America/New_York`
-- If calendar data cannot be loaded, the announcer fails safe with `No trade today. Calendar unavailable.`
-- Default rules include an explicit weekend no-trade guard
-- The core rule engine is still separated from delivery, so you can add a full Discord bot later without rewriting the calendar logic
+- If calendar data cannot be loaded, the announcer falls back to a red no-trade outlook
+- `data/state.json` is runtime state only and should not be committed
+- The core rule engine stays separate from delivery, so you can add a full Discord bot later without rewriting the calendar logic

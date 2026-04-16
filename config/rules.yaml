@@ -32,6 +32,22 @@
     NY_PM_FIRST_HALF: RED
     NY_PM_SECOND_HALF: RED
 
+- id: partial_holiday_day
+  priority: 91
+  when:
+    has_partial_holiday_today: true
+  day_color: WHITE
+  tradable: cautious
+  reason: Partial holiday or early close day.
+  session_colors:
+    London: WHITE
+    PreMarket: WHITE
+    NY_AM_FIRST_HALF: WHITE
+    NY_AM_SECOND_HALF: WHITE
+    Lunch: RED
+    NY_PM_FIRST_HALF: RED
+    NY_PM_SECOND_HALF: RED
+
 - id: nfp_week_thursday
   priority: 120
   when:
@@ -241,6 +257,22 @@
     PreMarket: RED
     NY_AM_FIRST_HALF: GREEN
     NY_AM_SECOND_HALF: GREEN
+    Lunch: GREEN
+    NY_PM_FIRST_HALF: GREEN
+    NY_PM_SECOND_HALF: GREEN
+
+- id: no_major_usd_news_day
+  priority: 5
+  when:
+    has_no_major_usd_news_today: true
+  day_color: WHITE
+  tradable: cautious
+  reason: No major USD news today.
+  session_colors:
+    London: GREEN
+    PreMarket: GREEN
+    NY_AM_FIRST_HALF: WHITE
+    NY_AM_SECOND_HALF: WHITE
     Lunch: GREEN
     NY_PM_FIRST_HALF: GREEN
     NY_PM_SECOND_HALF: GREEN

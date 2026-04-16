@@ -1,7 +1,9 @@
 from datetime import date
 
+import pytest
+
 from bot.config import load_rules
-from bot.models import DayColor, TradableStatus
+from bot.models import DayColor, RuleDefinition, TradableStatus
 from bot.rule_engine import RuleEngine
 
 
@@ -19,9 +21,11 @@ def test_rule_engine_prefers_highest_priority(tmp_path):
   session_colors:
     London: GREEN
     PreMarket: GREEN
-    NY_AM: GREEN
+    NY_AM_FIRST_HALF: GREEN
+    NY_AM_SECOND_HALF: GREEN
     Lunch: GREEN
-    NY_PM: GREEN
+    NY_PM_FIRST_HALF: GREEN
+    NY_PM_SECOND_HALF: GREEN
 - id: high
   priority: 20
   when:
@@ -32,9 +36,11 @@ def test_rule_engine_prefers_highest_priority(tmp_path):
   session_colors:
     London: RED
     PreMarket: RED
-    NY_AM: RED
+    NY_AM_FIRST_HALF: RED
+    NY_AM_SECOND_HALF: RED
     Lunch: RED
-    NY_PM: RED
+    NY_PM_FIRST_HALF: RED
+    NY_PM_SECOND_HALF: RED
 - id: fallback
   priority: 0
   when: {}
@@ -44,9 +50,11 @@ def test_rule_engine_prefers_highest_priority(tmp_path):
   session_colors:
     London: GREEN
     PreMarket: GREEN
-    NY_AM: GREEN
+    NY_AM_FIRST_HALF: GREEN
+    NY_AM_SECOND_HALF: GREEN
     Lunch: GREEN
-    NY_PM: GREEN
+    NY_PM_FIRST_HALF: GREEN
+    NY_PM_SECOND_HALF: GREEN
 """,
         encoding="utf-8",
     )
@@ -84,9 +92,11 @@ def test_rule_engine_matches_weekend_list_condition(tmp_path):
   session_colors:
     London: RED
     PreMarket: RED
-    NY_AM: RED
+    NY_AM_FIRST_HALF: RED
+    NY_AM_SECOND_HALF: RED
     Lunch: RED
-    NY_PM: RED
+    NY_PM_FIRST_HALF: RED
+    NY_PM_SECOND_HALF: RED
 - id: fallback
   priority: 0
   when: {}
@@ -96,9 +106,11 @@ def test_rule_engine_matches_weekend_list_condition(tmp_path):
   session_colors:
     London: GREEN
     PreMarket: GREEN
-    NY_AM: GREEN
+    NY_AM_FIRST_HALF: GREEN
+    NY_AM_SECOND_HALF: GREEN
     Lunch: GREEN
-    NY_PM: GREEN
+    NY_PM_FIRST_HALF: GREEN
+    NY_PM_SECOND_HALF: GREEN
 """,
         encoding="utf-8",
     )
@@ -125,9 +137,11 @@ def test_rule_engine_rejects_unknown_operator(tmp_path):
   session_colors:
     London: RED
     PreMarket: RED
-    NY_AM: RED
+    NY_AM_FIRST_HALF: RED
+    NY_AM_SECOND_HALF: RED
     Lunch: RED
-    NY_PM: RED
+    NY_PM_FIRST_HALF: RED
+    NY_PM_SECOND_HALF: RED
 - id: fallback
   priority: 0
   when: {}
@@ -137,19 +151,17 @@ def test_rule_engine_rejects_unknown_operator(tmp_path):
   session_colors:
     London: GREEN
     PreMarket: GREEN
-    NY_AM: GREEN
+    NY_AM_FIRST_HALF: GREEN
+    NY_AM_SECOND_HALF: GREEN
     Lunch: GREEN
-    NY_PM: GREEN
+    NY_PM_FIRST_HALF: GREEN
+    NY_PM_SECOND_HALF: GREEN
 """,
         encoding="utf-8",
     )
 
-    engine = RuleEngine(load_rules(rules_path))
-    try:
-        engine.match(date(2026, 4, 1), {"days_before_cpi": 1})
-        assert False, "Expected ValueError for unsupported operator."
-    except ValueError as error:
-        assert "Unsupported rule operator" in str(error)
+    with pytest.raises(ValueError, match="Unsupported rule operator"):
+        load_rules(rules_path)
 
 
 def test_rule_engine_rejects_mixed_equals_operator(tmp_path):
@@ -168,6 +180,154 @@ def test_rule_engine_rejects_mixed_equals_operator(tmp_path):
   session_colors:
     London: RED
     PreMarket: RED
+    NY_AM_FIRST_HALF: RED
+    NY_AM_SECOND_HALF: RED
+    Lunch: RED
+    NY_PM_FIRST_HALF: RED
+    NY_PM_SECOND_HALF: RED
+- id: fallback
+  priority: 0
+  when: {}
+  day_color: GREEN
+  tradable: trade
+  reason: fallback
+  session_colors:
+    London: GREEN
+    PreMarket: GREEN
+    NY_AM_FIRST_HALF: GREEN
+    NY_AM_SECOND_HALF: GREEN
+    Lunch: GREEN
+    NY_PM_FIRST_HALF: GREEN
+    NY_PM_SECOND_HALF: GREEN
+""",
+        encoding="utf-8",
+    )
+
+    engine = RuleEngine(load_rules(rules_path))
+    with pytest.raises(ValueError, match="cannot be combined"):
+        engine.match(date(2026, 4, 1), {"days_before_cpi": 1})
+
+
+def test_rule_engine_requires_fallback_rule():
+    only_rule = RuleDefinition(
+        id="only_rule",
+        priority=10,
+        when={"weekday": "MON"},
+        day_color=DayColor.GREEN,
+        tradable=TradableStatus.TRADE,
+        session_colors={
+            "London": DayColor.GREEN,
+            "PreMarket": DayColor.GREEN,
+            "NY_AM_FIRST_HALF": DayColor.GREEN,
+            "NY_AM_SECOND_HALF": DayColor.GREEN,
+            "Lunch": DayColor.GREEN,
+            "NY_PM_FIRST_HALF": DayColor.GREEN,
+            "NY_PM_SECOND_HALF": DayColor.GREEN,
+        },
+        reason="only",
+    )
+    with pytest.raises(ValueError, match="fallback rule"):
+        RuleEngine([only_rule])
+
+
+def test_load_rules_rejects_non_string_contains_operator(tmp_path):
+    rules_path = tmp_path / "rules.yaml"
+    rules_path.write_text(
+        """
+- id: bad_contains
+  priority: 10
+  when:
+    categories_today:
+      contains: 5
+  day_color: RED
+  tradable: no_trade
+  reason: bad
+  session_colors:
+    London: RED
+    PreMarket: RED
+    NY_AM_FIRST_HALF: RED
+    NY_AM_SECOND_HALF: RED
+    Lunch: RED
+    NY_PM_FIRST_HALF: RED
+    NY_PM_SECOND_HALF: RED
+- id: fallback
+  priority: 0
+  when: {}
+  day_color: GREEN
+  tradable: trade
+  reason: fallback
+  session_colors:
+    London: GREEN
+    PreMarket: GREEN
+    NY_AM_FIRST_HALF: GREEN
+    NY_AM_SECOND_HALF: GREEN
+    Lunch: GREEN
+    NY_PM_FIRST_HALF: GREEN
+    NY_PM_SECOND_HALF: GREEN
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="contains must be a string"):
+        load_rules(rules_path)
+
+
+def test_load_rules_rejects_non_int_gte_operator(tmp_path):
+    rules_path = tmp_path / "rules.yaml"
+    rules_path.write_text(
+        """
+- id: bad_gte
+  priority: 10
+  when:
+    days_before_cpi:
+      gte: soon
+  day_color: RED
+  tradable: no_trade
+  reason: bad
+  session_colors:
+    London: RED
+    PreMarket: RED
+    NY_AM_FIRST_HALF: RED
+    NY_AM_SECOND_HALF: RED
+    Lunch: RED
+    NY_PM_FIRST_HALF: RED
+    NY_PM_SECOND_HALF: RED
+- id: fallback
+  priority: 0
+  when: {}
+  day_color: GREEN
+  tradable: trade
+  reason: fallback
+  session_colors:
+    London: GREEN
+    PreMarket: GREEN
+    NY_AM_FIRST_HALF: GREEN
+    NY_AM_SECOND_HALF: GREEN
+    Lunch: GREEN
+    NY_PM_FIRST_HALF: GREEN
+    NY_PM_SECOND_HALF: GREEN
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="gte must be an int"):
+        load_rules(rules_path)
+
+
+def test_load_rules_rejects_legacy_session_names(tmp_path):
+    rules_path = tmp_path / "rules.yaml"
+    rules_path.write_text(
+        """
+- id: bad_sessions
+  priority: 10
+  when:
+    weekday: MON
+  day_color: RED
+  tradable: no_trade
+  reason: bad
+  session_colors:
+    London: RED
+    PreMarket: RED
     NY_AM: RED
     Lunch: RED
     NY_PM: RED
@@ -180,16 +340,14 @@ def test_rule_engine_rejects_mixed_equals_operator(tmp_path):
   session_colors:
     London: GREEN
     PreMarket: GREEN
-    NY_AM: GREEN
+    NY_AM_FIRST_HALF: GREEN
+    NY_AM_SECOND_HALF: GREEN
     Lunch: GREEN
-    NY_PM: GREEN
+    NY_PM_FIRST_HALF: GREEN
+    NY_PM_SECOND_HALF: GREEN
 """,
         encoding="utf-8",
     )
 
-    engine = RuleEngine(load_rules(rules_path))
-    try:
-        engine.match(date(2026, 4, 1), {"days_before_cpi": 1})
-        assert False, "Expected ValueError for mixed equals operator."
-    except ValueError as error:
-        assert "cannot be combined" in str(error)
+    with pytest.raises(ValueError, match="unsupported session names"):
+        load_rules(rules_path)

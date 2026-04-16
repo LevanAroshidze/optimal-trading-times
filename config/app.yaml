@@ -1,10 +1,23 @@
 delivery:
   webhook_url_env: DISCORD_WEBHOOK_URL
 
-schedule:
-  timezone: Asia/Tbilisi
-  hour: 9
-  minute: 0
+runtime:
+  state_path: data/state.json
+
+schedules:
+  morning_summary:
+    timezone: Asia/Tbilisi
+    hour: 9
+    minute: 0
+  ny_recheck:
+    timezone: America/New_York
+    hour: 8
+    minute: 0
+  weekly_outlook:
+    timezone: Asia/Tbilisi
+    weekday: SUN
+    hour: 21
+    minute: 0
 
 calendar:
   urls:

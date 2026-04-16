@@ -9,7 +9,9 @@ from bot.calendar_features import CalendarFeatureBuilder
 from bot.calendar_source import ForexFactoryCalendarSource
 from bot.config import load_app_config, load_event_aliases, load_rules
 from bot.formatter import DiscordFormatter
+from bot.notifier import TradingCalendarNotifier
 from bot.rule_engine import RuleEngine
+from bot.state_store import StateStore
 from bot.summary_service import DailySummaryService
 from bot.webhook_sender import DiscordWebhookSender
 
@@ -48,15 +50,21 @@ async def _run_once() -> None:
         feature_builder=feature_builder,
         rule_engine=rule_engine,
         market_timezone=app_config.calendar.market_timezone,
-        decision_timezone=app_config.schedule.timezone,
     )
     sender = DiscordWebhookSender(
         webhook_url=webhook_url,
         timeout_seconds=app_config.calendar.timeout_seconds,
     )
+    state_store = StateStore(root / app_config.runtime.state_path)
+    notifier = TradingCalendarNotifier(
+        app_config=app_config,
+        summary_service=summary_service,
+        formatter=formatter,
+        sender=sender,
+        state_store=state_store,
+    )
 
-    decision = await summary_service.build_decision_for_today()
-    await sender.send_message(formatter.format(decision))
+    await notifier.run_once()
 
 
 def main() -> None:

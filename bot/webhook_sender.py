@@ -19,6 +19,6 @@ class DiscordWebhookSender:
                 status_code = error.response.status_code
                 raise RuntimeError(
                     f"Discord webhook rejected the message with status {status_code}."
-                ) from None
-            except httpx.HTTPError:
-                raise RuntimeError("Failed to send Discord webhook message.") from None
+                ) from error
+            except httpx.RequestError as error:
+                raise RuntimeError("Failed to send Discord webhook message.") from error

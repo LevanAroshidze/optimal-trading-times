@@ -1,7 +1,12 @@
 __pycache__/
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
 .venv/
 venv/
 .env
 *.pyc
+*.egg-info/
 Git-2.53.0.2-64-bit.exe
+Firefox Installer.exe
+data/state.json

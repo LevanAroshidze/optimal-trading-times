@@ -6,14 +6,15 @@ import pytest
 from bot.config import load_rules
 from bot.models import DayColor, SESSION_ORDER
 from bot.rule_engine import RuleEngine
+from bot.type_defs import FeatureMap, FeatureValue
 
 
 RULES = load_rules(Path("config/rules.yaml"))
 ENGINE = RuleEngine(RULES)
 
 
-def make_features(**overrides):
-    features = {
+def make_features(**overrides: FeatureValue) -> FeatureMap:
+    features: FeatureMap = {
         "weekday": "MON",
         "week_type": None,
         "days_before_cpi": None,
@@ -21,10 +22,12 @@ def make_features(**overrides):
         "has_cpi_today": False,
         "has_ppi_today": False,
         "has_bank_holiday_today": False,
+        "has_partial_holiday_today": False,
         "has_830_red_news": False,
         "has_powell_10am_today": False,
         "days_until_powell_10am": None,
         "has_pm_red_news": False,
+        "has_no_major_usd_news_today": False,
         "categories_today": [],
     }
     features.update(overrides)
@@ -55,6 +58,19 @@ def make_features(**overrides):
                 "PreMarket": DayColor.RED,
                 "NY_AM_FIRST_HALF": DayColor.RED,
                 "NY_AM_SECOND_HALF": DayColor.RED,
+                "Lunch": DayColor.RED,
+                "NY_PM_FIRST_HALF": DayColor.RED,
+                "NY_PM_SECOND_HALF": DayColor.RED,
+            },
+        ),
+        (
+            "partial_holiday_day",
+            make_features(weekday="MON", has_partial_holiday_today=True),
+            {
+                "London": DayColor.WHITE,
+                "PreMarket": DayColor.WHITE,
+                "NY_AM_FIRST_HALF": DayColor.WHITE,
+                "NY_AM_SECOND_HALF": DayColor.WHITE,
                 "Lunch": DayColor.RED,
                 "NY_PM_FIRST_HALF": DayColor.RED,
                 "NY_PM_SECOND_HALF": DayColor.RED,
@@ -230,6 +246,19 @@ def make_features(**overrides):
             },
         ),
         (
+            "no_major_usd_news_day",
+            make_features(weekday="MON", has_no_major_usd_news_today=True),
+            {
+                "London": DayColor.GREEN,
+                "PreMarket": DayColor.GREEN,
+                "NY_AM_FIRST_HALF": DayColor.WHITE,
+                "NY_AM_SECOND_HALF": DayColor.WHITE,
+                "Lunch": DayColor.GREEN,
+                "NY_PM_FIRST_HALF": DayColor.GREEN,
+                "NY_PM_SECOND_HALF": DayColor.GREEN,
+            },
+        ),
+        (
             "default_green_day",
             make_features(weekday="MON"),
             {
@@ -244,7 +273,9 @@ def make_features(**overrides):
         ),
     ],
 )
-def test_production_rule_matrix(rule_id, features, expected_colors):
+def test_production_rule_matrix(
+    rule_id: str, features: FeatureMap, expected_colors: dict[str, DayColor]
+) -> None:
     decision = ENGINE.match(date(2026, 4, 1), features)
 
     assert decision.rule_id == rule_id

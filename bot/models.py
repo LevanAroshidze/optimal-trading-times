@@ -3,7 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from enum import StrEnum
-from typing import Any
+from typing import TypeAlias
+
+from bot.type_defs import FeatureMap, RuleConditions, SourceStatus
+
+
+SessionColors: TypeAlias = dict[str, "DayColor"]
 
 
 class DayColor(StrEnum):
@@ -56,18 +61,16 @@ class CalendarEvent:
     country: str
     impact: str
     starts_at: datetime
-    forecast: str = ""
-    previous: str = ""
 
 
 @dataclass(frozen=True)
 class RuleDefinition:
     id: str
     priority: int
-    when: dict[str, Any]
+    when: RuleConditions
     day_color: DayColor
     tradable: TradableStatus
-    session_colors: dict[str, DayColor]
+    session_colors: SessionColors
     reason: str
 
 
@@ -77,10 +80,9 @@ class DailyDecision:
     target_date: date
     day_color: DayColor
     tradable: TradableStatus
-    session_colors: dict[str, DayColor]
+    session_colors: SessionColors
     reason: str
-    matched_conditions: dict[str, Any] = field(default_factory=dict)
-    source_status: str = "live"
+    matched_conditions: RuleConditions = field(default_factory=dict)
 
     @property
     def allowed_sessions(self) -> list[str]:
@@ -107,7 +109,7 @@ class DailyDecision:
         ]
 
     @classmethod
-    def calendar_unavailable(cls, target_date: date) -> "DailyDecision":
+    def calendar_unavailable(cls, target_date: date) -> DailyDecision:
         return cls(
             rule_id="calendar_unavailable",
             target_date=target_date,
@@ -115,5 +117,37 @@ class DailyDecision:
             tradable=TradableStatus.NO_TRADE,
             session_colors={session: DayColor.RED for session in SESSION_ORDER},
             reason="Calendar unavailable.",
-            source_status="unavailable",
         )
+
+
+@dataclass(frozen=True)
+class CalendarDayAnalysis:
+    features: FeatureMap
+    strongest_news_today: list[str] = field(default_factory=list)
+    strongest_news_tomorrow: list[str] = field(default_factory=list)
+    other_red_news_today: list[str] = field(default_factory=list)
+    quiet_note: str | None = None
+    calendar_snapshot: list[str] = field(default_factory=list)
+    pressure_overlay: SessionColors = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class DailyOutlook:
+    decision: DailyDecision
+    summary_reason: str
+    strongest_news_today: list[str] = field(default_factory=list)
+    strongest_news_tomorrow: list[str] = field(default_factory=list)
+    other_red_news_today: list[str] = field(default_factory=list)
+    quiet_note: str | None = None
+    calendar_snapshot: list[str] = field(default_factory=list)
+    source_status: SourceStatus = "live"
+
+    @property
+    def target_date(self) -> date:
+        return self.decision.target_date
+
+
+@dataclass(frozen=True)
+class WeeklyOutlook:
+    week_start: date
+    days: list[DailyOutlook] = field(default_factory=list)

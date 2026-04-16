@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from datetime import datetime
 from typing import Iterable
 
 import httpx
 
 from bot.models import CalendarEvent
+from bot.type_defs import StructuredValue
 
 
 logger = logging.getLogger(__name__)
@@ -57,8 +59,6 @@ class ForexFactoryCalendarSource:
                     country=country,
                     impact=str(item.get("impact", "")).strip(),
                     starts_at=starts_at,
-                    forecast=str(item.get("forecast", "")).strip(),
-                    previous=str(item.get("previous", "")).strip(),
                 )
                 unique_key = (
                     event.title,
@@ -75,8 +75,10 @@ class ForexFactoryCalendarSource:
 
         return sorted(events.values(), key=lambda event: event.starts_at)
 
-    async def _fetch_all(self, client: httpx.AsyncClient) -> list[list[dict]]:
-        responses: list[list[dict]] = []
+    async def _fetch_all(
+        self, client: httpx.AsyncClient
+    ) -> list[list[Mapping[str, StructuredValue]]]:
+        responses: list[list[Mapping[str, StructuredValue]]] = []
         for url in self.urls:
             try:
                 response = await client.get(url)
@@ -92,7 +94,25 @@ class ForexFactoryCalendarSource:
                 raise CalendarSourceError(
                     f"Calendar URL returned invalid JSON: {url}"
                 ) from error
-            if not isinstance(payload, list):
-                raise CalendarSourceError(f"Unexpected payload for calendar URL: {url}")
-            responses.append(payload)
+            responses.append(self._coerce_payload(payload, url))
         return responses
+
+    def _coerce_payload(
+        self, payload: StructuredValue, url: str
+    ) -> list[Mapping[str, StructuredValue]]:
+        if not isinstance(payload, list):
+            raise CalendarSourceError(f"Unexpected payload for calendar URL: {url}")
+
+        items: list[Mapping[str, StructuredValue]] = []
+        for item in payload:
+            if not isinstance(item, Mapping):
+                raise CalendarSourceError(
+                    f"Calendar payload item must be a mapping for URL: {url}"
+                )
+            items.append(
+                {
+                    str(key): value
+                    for key, value in item.items()
+                }
+            )
+        return items

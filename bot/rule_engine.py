@@ -1,16 +1,20 @@
 from __future__ import annotations
 
 from datetime import date
-from typing import Any
 
 from bot.models import DailyDecision, RuleDefinition
+from bot.type_defs import FeatureMap, FeatureValue, RuleConditions, RuleOperatorMap
 
 
 class RuleEngine:
     def __init__(self, rules: list[RuleDefinition]) -> None:
+        if not rules:
+            raise ValueError("RuleEngine requires at least one rule.")
+        if not any(not rule.when for rule in rules):
+            raise ValueError("RuleEngine requires a fallback rule.")
         self.rules = rules
 
-    def match(self, target_date: date, features: dict[str, Any]) -> DailyDecision:
+    def match(self, target_date: date, features: FeatureMap) -> DailyDecision:
         for rule in self.rules:
             if self._rule_matches(rule.when, features):
                 return DailyDecision(
@@ -22,9 +26,9 @@ class RuleEngine:
                     reason=rule.reason,
                     matched_conditions=rule.when,
                 )
-        raise RuntimeError("No fallback rule configured.")
+        raise AssertionError("Validated rules should always include a fallback rule.")
 
-    def _rule_matches(self, conditions: dict[str, Any], features: dict[str, Any]) -> bool:
+    def _rule_matches(self, conditions: RuleConditions, features: FeatureMap) -> bool:
         for key, expected in conditions.items():
             actual = features.get(key)
             if isinstance(expected, dict):
@@ -42,7 +46,9 @@ class RuleEngine:
                 return False
         return True
 
-    def _matches_operator(self, expected: dict[str, Any], actual: Any) -> bool:
+    def _matches_operator(
+        self, expected: RuleOperatorMap, actual: FeatureValue | None
+    ) -> bool:
         allowed = {"equals", "gte", "lte", "contains"}
         unknown = set(expected) - allowed
         if unknown:
@@ -58,10 +64,16 @@ class RuleEngine:
 
         if actual is None:
             return False
-        if "gte" in expected and actual < expected["gte"]:
-            return False
-        if "lte" in expected and actual > expected["lte"]:
-            return False
+        if "gte" in expected:
+            if not isinstance(actual, int):
+                return False
+            if actual < expected["gte"]:
+                return False
+        if "lte" in expected:
+            if not isinstance(actual, int):
+                return False
+            if actual > expected["lte"]:
+                return False
         if "contains" in expected:
             return isinstance(actual, list) and expected["contains"] in actual
 
