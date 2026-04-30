@@ -1,2 +1,0 @@
-[console_scripts]
-optimal-trade-sessions-bot = bot.main:main
