@@ -23,6 +23,7 @@ All notable changes are recorded here. Versions follow [SemVer](https://semver.o
 - Recheck date now uses `app_config.ny_recheck` timezone (previously used the morning timezone).
 - Holiday detection: partial holidays now require an `impact == "holiday"` USD entry, aligned with full-holiday detection.
 - `requirements.txt` removed; `pyproject.toml` is the source of truth for runtime and dev dependencies.
+- Dockerfile no longer declares `VOLUME ["/app/data"]` — Railway rejects `VOLUME` instructions; mount a Railway Volume at `/app/data` from the dashboard instead. The directory is still created at build time so non-Railway runs work without an explicit mount.
 
 ### Removed
 - Tracked Windows installer binaries (`Git-2.53.0.2-64-bit.exe`, `python-3.12.0-amd64.exe`) and the build-time `optimal_trade_sessions_bot.egg-info/` directory.

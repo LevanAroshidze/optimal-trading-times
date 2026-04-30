@@ -97,7 +97,12 @@ docker build -t trade-sessions-bot .
 docker run -e DISCORD_WEBHOOK_URL=... -v "$PWD/data:/app/data" trade-sessions-bot
 ```
 
-For Railway, set `DISCORD_WEBHOOK_URL` in project variables and use the cron schedule documented in `railway.json` (`*/15 * * * *`). Mount a persistent volume at `/app/data` so `state.json` survives redeploys.
+For Railway:
+
+1. Create a service from this repo (Railway picks up the Dockerfile and `railway.json` automatically).
+2. Set `DISCORD_WEBHOOK_URL` in the service variables.
+3. Attach a [Railway Volume](https://docs.railway.com/reference/volumes) and mount it at `/app/data` so `state.json` survives redeploys. Railway provisions the volume from the dashboard; the Dockerfile intentionally omits a `VOLUME` directive because Railway rejects it.
+4. Use the cron schedule documented in `railway.json` (`*/15 * * * *`).
 
 The application internally gates these schedules:
 

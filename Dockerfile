@@ -12,8 +12,7 @@ COPY bot ./bot
 COPY config ./config
 
 RUN pip install --upgrade pip \
- && pip install .
-
-VOLUME ["/app/data"]
+ && pip install . \
+ && mkdir -p /app/data
 
 ENTRYPOINT ["python", "-m", "bot"]
