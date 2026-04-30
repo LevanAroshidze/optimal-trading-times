@@ -7,7 +7,6 @@ from typing import TypeAlias
 
 from bot.type_defs import FeatureMap, RuleConditions, SourceStatus
 
-
 SessionColors: TypeAlias = dict[str, "DayColor"]
 
 

@@ -24,9 +24,17 @@ RuleOperatorMap = TypedDict(
     "RuleOperatorMap",
     {
         "equals": ScalarValue,
+        "not_equals": ScalarValue,
+        "gt": int,
         "gte": int,
+        "lt": int,
         "lte": int,
+        "between": "list[int]",
+        "in": "list[ScalarValue]",
         "contains": str,
+        "not_contains": str,
+        "any_of": "list[RuleOperatorMap]",
+        "all_of": "list[RuleOperatorMap]",
     },
     total=False,
 )
@@ -36,10 +44,15 @@ RuleConditionValue: TypeAlias = FeatureValue | RuleOperatorMap
 FeatureMap: TypeAlias = dict[str, FeatureValue]
 RuleConditions: TypeAlias = dict[str, RuleConditionValue]
 SourceStatus: TypeAlias = Literal["live", "unavailable"]
+PostKind: TypeAlias = Literal["daily", "weekly", "recheck"]
 
 
 class CalendarEventSource(Protocol):
     async def fetch_events(self) -> list[CalendarEvent]: ...
+
+
+class WebhookSenderProtocol(Protocol):
+    async def send_message(self, content: str) -> None: ...
 
 
 class SummaryServiceProtocol(Protocol):
@@ -68,9 +81,36 @@ class StateSection(TypedDict, total=False):
     snapshot: list[str]
     checked_for_date: str | None
     posted_for_week_start: str | None
+    consecutive_source_failures: int
+    last_source_status: str | None
 
 
 class BotStatePayload(TypedDict, total=False):
+    schema_version: int
     daily: StateSection
     recheck: StateSection
     weekly: StateSection
+    operations: StateSection
+
+
+KNOWN_FEATURE_KEYS: frozenset[str] = frozenset(
+    {
+        "weekday",
+        "week_type",
+        "days_before_cpi",
+        "days_before_ppi",
+        "has_cpi_today",
+        "has_ppi_today",
+        "has_bank_holiday_today",
+        "has_partial_holiday_today",
+        "has_830_red_news",
+        "has_powell_10am_today",
+        "days_until_powell_10am",
+        "has_pm_red_news",
+        "has_no_major_usd_news_today",
+        "categories_today",
+        "strong_usd_news_today",
+        "strong_usd_news_tomorrow",
+        "other_red_usd_news_today",
+    }
+)

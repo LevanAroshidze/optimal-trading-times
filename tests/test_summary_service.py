@@ -1,11 +1,10 @@
 from datetime import date, datetime
-from pathlib import Path
 
-from bot.calendar_features import CalendarFeatureBuilder
-from bot.config import EventAliasConfig, load_rules
+from bot.config import load_rules
 from bot.models import CalendarEvent
 from bot.rule_engine import RuleEngine
 from bot.summary_service import DailySummaryService
+from tests.conftest import CONFIG_DIR, make_aliases, make_feature_builder, make_outlook
 
 
 class FakeSource:
@@ -14,17 +13,15 @@ class FakeSource:
 
 
 def make_service() -> DailySummaryService:
-    aliases = EventAliasConfig(
+    aliases = make_aliases(
         title_aliases={
-            "CPI": ("cpi",),
-            "POWELL": ("fed chair powell speaks",),
-            "FOMC": ("federal funds rate", "fomc statement", "fomc press conference"),
+            "CPI": ["cpi"],
+            "POWELL": ["fed chair powell speaks"],
+            "FOMC": ["federal funds rate", "fomc statement", "fomc press conference"],
         },
-        strongest_categories=("NFP", "CPI", "PPI", "FOMC", "POWELL"),
-        partial_holiday_terms=("early close", "half day"),
     )
-    feature_builder = CalendarFeatureBuilder(aliases, "America/New_York")
-    rules = load_rules(Path("config/rules.yaml"))
+    feature_builder = make_feature_builder(aliases)
+    rules = load_rules(CONFIG_DIR / "rules.yaml")
     return DailySummaryService(
         source=FakeSource(),
         feature_builder=feature_builder,
@@ -36,10 +33,7 @@ def make_service() -> DailySummaryService:
 def test_summary_service_applies_no_news_rule():
     service = make_service()
 
-    outlook = service.build_outlook_for_date(
-        date(2026, 4, 13),
-        [],
-    )
+    outlook = service.build_outlook_for_date(date(2026, 4, 13), [])
 
     assert outlook.decision.rule_id == "no_major_usd_news_day"
     assert outlook.quiet_note is not None
@@ -82,3 +76,19 @@ def test_summary_service_builds_weekly_outlook_for_target_week():
 
     assert weekly is not None
     assert len(weekly.days) == 5
+
+
+def test_daily_fingerprint_includes_calendar_snapshot():
+    service = make_service()
+    first = make_outlook(
+        "no_major_usd_news_day",
+        "No major USD news today.",
+        ["quiet:baseline"],
+    )
+    second = make_outlook(
+        "no_major_usd_news_day",
+        "No major USD news today.",
+        ["holiday:partial"],
+    )
+
+    assert service.daily_fingerprint(first) != service.daily_fingerprint(second)

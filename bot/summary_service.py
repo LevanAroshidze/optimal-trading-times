@@ -96,6 +96,7 @@ class DailySummaryService:
             *outlook.strongest_news_today,
             *outlook.other_red_news_today,
             *outlook.strongest_news_tomorrow,
+            *outlook.calendar_snapshot,
             outlook.quiet_note or "",
         ]
         return self._fingerprint(payload)

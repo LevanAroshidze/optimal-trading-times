@@ -4,10 +4,9 @@ from pathlib import Path
 import pytest
 
 from bot.config import load_rules
-from bot.models import DayColor, SESSION_ORDER
+from bot.models import SESSION_ORDER, DayColor
 from bot.rule_engine import RuleEngine
 from bot.type_defs import FeatureMap, FeatureValue
-
 
 RULES = load_rules(Path("config/rules.yaml"))
 ENGINE = RuleEngine(RULES)

@@ -4,20 +4,45 @@ Discord webhook announcer that reads the Forex Factory calendar, applies the YAM
 
 - one morning daily outlook
 - one Sunday night weekly outlook
-- one same-day recheck update only if the calendar meaningfully changed
+- one same-day NY recheck update only if the calendar meaningfully changed
 
-The app stays calendar-first, USD-only, and session-based.
+The app stays calendar-first, currency-scoped (USD by default), and session-based.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    FF[Forex Factory JSON]
+    Source[CalendarSource]
+    Features[CalendarFeatureBuilder]
+    Rules[RuleEngine + rules.yaml]
+    Summary[DailySummaryService]
+    Formatter[DiscordFormatter]
+    Webhook[DiscordWebhookSender]
+    Discord[(Discord channel)]
+    State[(StateStore data/state.json)]
+    Notifier{TradingCalendarNotifier}
+
+    FF --> Source --> Features --> Summary
+    Rules --> Summary
+    Summary --> Notifier
+    Notifier --> Formatter --> Webhook --> Discord
+    Notifier <--> State
+```
+
+Each box is a small module under `bot/`. The `Notifier` orchestrates the schedule, the `RuleEngine` is pure, and `StateStore` keeps idempotency information so the same morning is not posted twice.
 
 ## Current behavior
 
-- Pulls Forex Factory calendar events from JSON
+- Pulls Forex Factory calendar events from `ff_calendar_thisweek.json` and `ff_calendar_nextweek.json`
 - Separates `Strongest USD news` from `Other red-folder USD news`
 - Applies your matrix rules from `config/rules.yaml`
 - Treats `no major USD news` days as their own white/caution model
-- Distinguishes full USD holidays from partial holiday / early-close days
+- Distinguishes full USD holidays from partial-holiday / early-close days
 - Applies non-core red-news pressure to affected sessions conservatively
 - Suppresses duplicate posts across reruns by storing runtime state in `data/state.json`
-- Posts trader-style Discord messages through a webhook
+- Posts trader-style Discord messages through a webhook (with embeds where helpful)
+- Falls back to a "red, calendar unavailable" plan if every URL fails
 
 ## What it does not do
 
@@ -25,70 +50,83 @@ The app stays calendar-first, USD-only, and session-based.
 - No auto-trading
 - No chart scanning
 - No intraday buy/sell alerts
-- No slash commands in this version
 
 ## Setup
 
 1. Install Python 3.12+
 2. Install dependencies:
 
-```powershell
-python -m pip install -e .[dev]
-```
+   ```bash
+   python -m pip install -e '.[dev]'
+   ```
 
-3. Create a Discord webhook in the channel where you want announcements:
+3. Copy `.env.example` to `.env` and fill in `DISCORD_WEBHOOK_URL`.
+4. Edit:
+   - `config/app.yaml`
+   - `config/event_aliases.yaml`
+   - `config/rules.yaml`
+   - `config/messages.yaml` (optional copy/styling)
+5. Sanity check by running a dry-run for tomorrow:
 
-- Open the channel
-- Edit Channel
-- Integrations
-- Webhooks
-- New Webhook
-- Copy the webhook URL
+   ```bash
+   python -m bot --dry-run --target-date 2026-04-17
+   ```
 
-4. Set environment variables:
+6. Run for real once locally:
 
-```powershell
-$env:DISCORD_WEBHOOK_URL="https://discord.com/api/webhooks/..."
-```
+   ```bash
+   python -m bot
+   ```
 
-5. Review and edit:
+## CLI flags
 
-- `config/app.yaml`
-- `config/event_aliases.yaml`
-- `config/rules.yaml`
+| Flag | Description |
+| ---- | ----------- |
+| `--dry-run` | Build messages but do not send a webhook or write state. |
+| `--target-date YYYY-MM-DD` | Override the daily/recheck target date. |
+| `--force-kind {daily,weekly,recheck}` | Force a specific post kind to run. Use with `--dry-run`. |
+| `--config-dir PATH` | Use a non-default config directory (good for staging configs). |
+| `--log-level {DEBUG,INFO,WARNING,ERROR}` | Adjust log verbosity. |
 
-6. Run once locally:
+## Deployment
 
-```powershell
-python -m bot.main
-```
-
-## Railway cron
-
-Deploy this repo to Railway and set `DISCORD_WEBHOOK_URL` in Railway variables.
-
-This version is meant to run every 15 minutes and decide internally whether it is time to post. Use:
+A Dockerfile, Procfile, and `railway.json` are included.
 
 ```bash
-python -m bot.main
+docker build -t trade-sessions-bot .
+docker run -e DISCORD_WEBHOOK_URL=... -v "$PWD/data:/app/data" trade-sessions-bot
 ```
 
-Recommended cron:
+For Railway, set `DISCORD_WEBHOOK_URL` in project variables and use the cron schedule documented in `railway.json` (`*/15 * * * *`). Mount a persistent volume at `/app/data` so `state.json` survives redeploys.
 
-```text
-*/15 * * * *
-```
-
-The app will internally gate these schedules:
+The application internally gates these schedules:
 
 - Morning summary: `09:00 Asia/Tbilisi`
 - NY recheck: `08:00 America/New_York`
 - Weekly outlook: `21:00 Asia/Tbilisi` on Sunday
 
+A `policy.max_post_age_minutes` value (defaults to 240) prevents the bot from retroactively posting a stale "good morning" note hours later if state was lost.
+
+## Tests, lint, types
+
+```bash
+ruff check bot tests
+mypy bot
+pytest -q
+```
+
+CI runs ruff, mypy, vulture, and pytest on push and PR (`.github/workflows/ci.yml`).
+
+## Documentation
+
+- [docs/rules.md](docs/rules.md) — rule schema reference (operators, feature keys).
+- [docs/runbook.md](docs/runbook.md) — production runbook (why didn't it post, why did it post twice, how to reset state).
+- [CHANGELOG.md](CHANGELOG.md) — release history.
+- [CONTRIBUTING.md](CONTRIBUTING.md) — how to add or change rules without touching Python.
+
 ## Notes
 
-- `config/app.yaml` defines the posting schedules and runtime state path
-- Calendar logic uses `America/New_York`
-- If calendar data cannot be loaded, the announcer falls back to a red no-trade outlook
-- `data/state.json` is runtime state only and should not be committed
-- The core rule engine stays separate from delivery, so you can add a full Discord bot later without rewriting the calendar logic
+- `config/app.yaml` defines schedules, calendar URLs, session windows, news-window thresholds, and post-age policy.
+- Calendar logic uses `America/New_York`.
+- If the calendar source cannot be loaded, the announcer falls back to a red no-trade outlook.
+- `data/state.json` is runtime state only and should not be committed.

@@ -1,13 +1,29 @@
 from __future__ import annotations
 
+from typing import Any
+
+from bot.config import MessagesConfig
 from bot.models import (
+    SESSION_LABELS,
+    SESSION_ORDER,
     DailyDecision,
     DailyOutlook,
     DayColor,
-    SESSION_LABELS,
     SessionName,
     WeeklyOutlook,
 )
+from bot.webhook_sender import WebhookPayload
+
+_DAY_COLOR_HEX = {
+    DayColor.GREEN: 0x57F287,
+    DayColor.WHITE: 0xE0E0E0,
+    DayColor.RED: 0xED4245,
+}
+_SESSION_BAR_GLYPH = {
+    DayColor.GREEN: "🟢",
+    DayColor.WHITE: "⚪",
+    DayColor.RED: "🔴",
+}
 
 
 class DiscordFormatter:
@@ -19,22 +35,24 @@ class DiscordFormatter:
         SessionName.NY_PM_SECOND_HALF.value,
     }
 
+    def __init__(self, messages: MessagesConfig | None = None) -> None:
+        self.messages = messages or MessagesConfig()
+
     def format_daily(self, outlook: DailyOutlook) -> str:
         parts = [self._headline(outlook.decision, outlook.summary_reason)]
         parts.extend(self._session_lines(outlook.decision))
-
         parts.extend(self._news_lines(outlook))
 
         if outlook.quiet_note:
             parts.append(outlook.quiet_note)
 
         if outlook.source_status != "live":
-            parts.append("Calendar source unavailable. Posting the fail-safe plan.")
+            parts.append(self.messages.calendar_unavailable_note)
 
         return "\n".join(parts)
 
     def format_update(self, outlook: DailyOutlook, changed_items: list[str]) -> str:
-        parts = ["Update: the calendar changed after the morning post."]
+        parts = [self.messages.update_header]
         parts.append(self._headline(outlook.decision, outlook.summary_reason))
         parts.extend(self._session_lines(outlook.decision))
 
@@ -48,7 +66,7 @@ class DiscordFormatter:
         return "\n".join(parts)
 
     def format_weekly(self, weekly: WeeklyOutlook) -> str:
-        parts = ["Week Ahead"]
+        parts = [self.messages.week_ahead_header]
         for outlook in weekly.days:
             line = (
                 f"{outlook.target_date.strftime('%a')}: "
@@ -65,15 +83,62 @@ class DiscordFormatter:
             parts.append(line.strip())
         return "\n".join(parts)
 
+    def format_daily_embed(self, outlook: DailyOutlook) -> WebhookPayload:
+        embed: dict[str, Any] = {
+            "title": self._headline(outlook.decision, outlook.summary_reason),
+            "color": _DAY_COLOR_HEX[outlook.decision.day_color],
+            "fields": [],
+        }
+        bar = self.session_bar(outlook.decision)
+        if bar:
+            embed["description"] = bar
+
+        for label, sessions in (
+            ("Focus", outlook.decision.allowed_sessions),
+            ("Caution", outlook.decision.caution_sessions),
+            ("Avoid", outlook.decision.blocked_sessions),
+        ):
+            visible = [
+                session for session in sessions if session in self._VISIBLE_SESSIONS
+            ]
+            if visible:
+                embed["fields"].append(
+                    {
+                        "name": label,
+                        "value": self._join_sessions(visible),
+                        "inline": False,
+                    }
+                )
+
+        news_lines = self._news_lines(outlook)
+        if news_lines:
+            embed["fields"].append(
+                {"name": "News", "value": "\n".join(news_lines), "inline": False}
+            )
+        if outlook.quiet_note:
+            embed["fields"].append(
+                {"name": "Note", "value": outlook.quiet_note, "inline": False}
+            )
+
+        if outlook.source_status != "live":
+            embed["footer"] = {"text": self.messages.calendar_unavailable_note}
+
+        return WebhookPayload(content="", embeds=[embed])
+
+    def session_bar(self, decision: DailyDecision) -> str:
+        glyphs: list[str] = []
+        for session in SESSION_ORDER:
+            if session not in self._VISIBLE_SESSIONS:
+                continue
+            color = decision.session_colors.get(session, DayColor.GREEN)
+            glyphs.append(f"{_SESSION_BAR_GLYPH[color]} {SESSION_LABELS[session]}")
+        return "  ".join(glyphs)
+
     def _headline(self, decision: DailyDecision, reason: str) -> str:
         return f"{self._day_color_label(decision.day_color)} day. {reason}".strip()
 
     def _day_color_label(self, day_color: DayColor) -> str:
-        if day_color == DayColor.RED:
-            return "Red"
-        if day_color == DayColor.WHITE:
-            return "White"
-        return "Green"
+        return self.messages.day_color_labels.get(day_color.value, day_color.value)
 
     def _news_lines(self, outlook: DailyOutlook) -> list[str]:
         lines: list[str] = []
@@ -81,13 +146,13 @@ class DiscordFormatter:
             lines.append(
                 "Strongest USD news: "
                 f"{self._join_items(outlook.strongest_news_today)}. "
-                "Wait 15-30 minutes after the release before looking for trades."
+                f"{self.messages.strong_news_advice}"
             )
         if outlook.other_red_news_today:
             lines.append(
                 "Other red-folder USD news: "
                 f"{self._join_items(outlook.other_red_news_today)}. "
-                "Avoid the 2-3 hours before the release."
+                f"{self.messages.other_red_news_advice}"
             )
         if outlook.strongest_news_tomorrow:
             lines.append(

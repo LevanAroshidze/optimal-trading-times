@@ -1,8 +1,10 @@
 delivery:
   webhook_url_env: DISCORD_WEBHOOK_URL
+  ops_webhook_url_env: DISCORD_OPS_WEBHOOK_URL
 
 runtime:
   state_path: data/state.json
+  lock_path: data/state.lock
 
 schedules:
   morning_summary:
@@ -22,5 +24,43 @@ schedules:
 calendar:
   urls:
     - https://nfs.faireconomy.media/ff_calendar_thisweek.json
+    - https://nfs.faireconomy.media/ff_calendar_nextweek.json
   timeout_seconds: 10
   market_timezone: America/New_York
+  user_agent: optimal-trade-sessions-bot/0.1 (+https://github.com/optimal-trade-sessions-bot)
+  max_retries: 3
+  retry_backoff_seconds: 1.0
+
+windows:
+  pre_release_pressure_minutes: 180
+  pm_news_after_hour: 14
+  am_red_news_at: "08:30"
+  powell_speech_at: "10:00"
+  session_windows:
+    London:
+      start: "03:00"
+      end: "07:00"
+    PreMarket:
+      start: "07:00"
+      end: "08:30"
+    NY_AM_FIRST_HALF:
+      start: "08:30"
+      end: "10:30"
+    NY_AM_SECOND_HALF:
+      start: "10:30"
+      end: "12:00"
+    Lunch:
+      start: "12:00"
+      end: "13:30"
+    NY_PM_FIRST_HALF:
+      start: "13:30"
+      end: "15:00"
+    NY_PM_SECOND_HALF:
+      start: "15:00"
+      end: "17:00"
+
+policy:
+  max_post_age_minutes: 240
+  post_on_weekend: false
+  max_consecutive_source_failures: 3
+  duplicate_post_warning: true

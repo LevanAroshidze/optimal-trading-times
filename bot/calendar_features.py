@@ -4,26 +4,14 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
-from bot.config import EventAliasConfig
+from bot.config import EventAliasConfig, WindowsConfig
 from bot.models import (
     CalendarDayAnalysis,
     CalendarEvent,
     DayColor,
     SessionColors,
-    SessionName,
 )
 from bot.type_defs import FeatureMap
-
-
-SESSION_WINDOWS = {
-    SessionName.LONDON.value: (time(3, 0), time(7, 0)),
-    SessionName.PREMARKET.value: (time(7, 0), time(8, 30)),
-    SessionName.NY_AM_FIRST_HALF.value: (time(8, 30), time(10, 30)),
-    SessionName.NY_AM_SECOND_HALF.value: (time(10, 30), time(12, 0)),
-    SessionName.LUNCH.value: (time(12, 0), time(13, 30)),
-    SessionName.NY_PM_FIRST_HALF.value: (time(13, 30), time(15, 0)),
-    SessionName.NY_PM_SECOND_HALF.value: (time(15, 0), time(17, 0)),
-}
 
 
 @dataclass(frozen=True)
@@ -33,10 +21,23 @@ class EventCategoryMatch:
 
 
 class CalendarFeatureBuilder:
-    def __init__(self, aliases: EventAliasConfig, market_timezone: str) -> None:
+    def __init__(
+        self,
+        aliases: EventAliasConfig,
+        market_timezone: str,
+        windows: WindowsConfig,
+    ) -> None:
         self.aliases = aliases
         self.market_tz = ZoneInfo(market_timezone)
         self.strongest_categories = set(aliases.strongest_categories)
+        self.windows = windows
+
+    @property
+    def session_windows(self) -> dict[str, tuple[time, time]]:
+        return {
+            name: (window.start, window.end)
+            for name, window in self.windows.session_windows.items()
+        }
 
     def build_for_date(
         self, target_date: date, events: list[CalendarEvent]
@@ -81,6 +82,9 @@ class CalendarFeatureBuilder:
             {category for match in today_events for category in match.categories}
         )
 
+        powell_time = self.windows.powell_speech_at
+        am_time = self.windows.am_red_news_at
+
         features = {
             "weekday": target_date.strftime("%a").upper()[:3],
             "week_type": self._week_type(week_events),
@@ -90,12 +94,16 @@ class CalendarFeatureBuilder:
             "has_ppi_today": self._has_category_on_date(target_date, week_events, "PPI"),
             "has_bank_holiday_today": has_bank_holiday_today,
             "has_partial_holiday_today": has_partial_holiday_today,
-            "has_830_red_news": self._has_830_red_news(today_events),
+            "has_830_red_news": self._has_am_red_news(today_events, am_time),
             "has_powell_10am_today": self._has_time_sensitive_category(
-                today_events, "POWELL", 10, 0
+                today_events, "POWELL", powell_time.hour, powell_time.minute
             ),
             "days_until_powell_10am": self._days_until_time_sensitive_category(
-                target_date, week_events, "POWELL", 10, 0
+                target_date,
+                week_events,
+                "POWELL",
+                powell_time.hour,
+                powell_time.minute,
             ),
             "has_pm_red_news": self._has_pm_red_news(today_events),
             "has_no_major_usd_news_today": not has_major_usd_news_today,
@@ -157,9 +165,12 @@ class CalendarFeatureBuilder:
     def _week_start(self, value: date) -> date:
         return value - timedelta(days=value.weekday())
 
+    def _is_usd_event(self, match: EventCategoryMatch) -> bool:
+        return match.event.country.upper() == "USD"
+
     def _week_type(self, week_events: list[EventCategoryMatch]) -> str | None:
         if any(
-            "NFP" in match.categories and match.event.country == "USD"
+            "NFP" in match.categories and self._is_usd_event(match)
             for match in week_events
         ):
             return "NFP"
@@ -173,7 +184,7 @@ class CalendarFeatureBuilder:
                 match.event.starts_at.date()
                 for match in events
                 if category in match.categories
-                and match.event.country == "USD"
+                and self._is_usd_event(match)
                 and match.event.starts_at.date() >= target_date
             }
         )
@@ -186,32 +197,37 @@ class CalendarFeatureBuilder:
     ) -> bool:
         return any(
             category in match.categories
-            and match.event.country == "USD"
+            and self._is_usd_event(match)
             and match.event.starts_at.date() == target_date
             for match in events
         )
 
-    def _has_830_red_news(self, today_events: list[EventCategoryMatch]) -> bool:
+    def _has_am_red_news(
+        self, today_events: list[EventCategoryMatch], at_time: time
+    ) -> bool:
         return any(
             "RED_830AM" in match.categories
-            and match.event.country == "USD"
+            and self._is_usd_event(match)
             and match.event.impact.casefold() == "high"
-            and match.event.starts_at.hour == 8
-            and match.event.starts_at.minute == 30
+            and match.event.starts_at.hour == at_time.hour
+            and match.event.starts_at.minute == at_time.minute
             for match in today_events
         )
 
     def _has_full_holiday_today(self, today_events: list[EventCategoryMatch]) -> bool:
         return any(
-            match.event.country == "USD"
+            self._is_usd_event(match)
             and match.event.impact.casefold() == "holiday"
             and not self._is_partial_holiday_title(match.event.title)
             for match in today_events
         )
 
-    def _has_partial_holiday_today(self, today_events: list[EventCategoryMatch]) -> bool:
+    def _has_partial_holiday_today(
+        self, today_events: list[EventCategoryMatch]
+    ) -> bool:
         return any(
-            match.event.country == "USD"
+            self._is_usd_event(match)
+            and match.event.impact.casefold() == "holiday"
             and self._is_partial_holiday_title(match.event.title)
             for match in today_events
         )
@@ -221,14 +237,15 @@ class CalendarFeatureBuilder:
         return any(term in haystack for term in self.aliases.partial_holiday_terms)
 
     def _has_pm_red_news(self, today_events: list[EventCategoryMatch]) -> bool:
+        threshold = self.windows.pm_news_after_hour
         return any(
             (
                 "FOMC" in match.categories
                 or "PM_RED" in match.categories
                 or "POWELL_PM" in match.categories
             )
-            and match.event.country == "USD"
-            and match.event.starts_at.hour >= 14
+            and self._is_usd_event(match)
+            and match.event.starts_at.hour >= threshold
             for match in today_events
         )
 
@@ -241,7 +258,7 @@ class CalendarFeatureBuilder:
     ) -> bool:
         return any(
             category in match.categories
-            and match.event.country == "USD"
+            and self._is_usd_event(match)
             and match.event.starts_at.hour == hour
             and match.event.starts_at.minute == minute
             for match in today_events
@@ -260,7 +277,7 @@ class CalendarFeatureBuilder:
                 match.event.starts_at.date()
                 for match in events
                 if category in match.categories
-                and match.event.country == "USD"
+                and self._is_usd_event(match)
                 and match.event.starts_at.hour == hour
                 and match.event.starts_at.minute == minute
                 and match.event.starts_at.date() >= target_date
@@ -277,7 +294,7 @@ class CalendarFeatureBuilder:
         seen: set[str] = set()
 
         for match in self._sorted_matches(events):
-            if match.event.country != "USD":
+            if not self._is_usd_event(match):
                 continue
             if not (match.categories & categories):
                 continue
@@ -307,7 +324,7 @@ class CalendarFeatureBuilder:
 
     def _is_other_red_event(self, match: EventCategoryMatch) -> bool:
         return (
-            match.event.country == "USD"
+            self._is_usd_event(match)
             and match.event.impact.casefold() == "high"
             and not self._is_partial_holiday_title(match.event.title)
             and not (match.categories & self.strongest_categories)
@@ -373,15 +390,16 @@ class CalendarFeatureBuilder:
         return overlay
 
     def _pressure_overlay_for_event(self, starts_at: datetime) -> SessionColors:
-        pressure_start = starts_at - timedelta(minutes=180)
+        pressure_minutes = self.windows.pre_release_pressure_minutes
+        pressure_start = starts_at - timedelta(minutes=pressure_minutes)
         overlay: SessionColors = {}
 
-        for session_name, (start_time, end_time) in SESSION_WINDOWS.items():
+        for session_name, window in self.windows.session_windows.items():
             session_start = datetime.combine(
-                starts_at.date(), start_time, tzinfo=starts_at.tzinfo
+                starts_at.date(), window.start, tzinfo=starts_at.tzinfo
             )
             session_end = datetime.combine(
-                starts_at.date(), end_time, tzinfo=starts_at.tzinfo
+                starts_at.date(), window.end, tzinfo=starts_at.tzinfo
             )
             overlap_start = max(session_start, pressure_start)
             overlap_end = min(session_end, starts_at)

@@ -49,34 +49,63 @@ class RuleEngine:
     def _matches_operator(
         self, expected: RuleOperatorMap, actual: FeatureValue | None
     ) -> bool:
-        allowed = {"equals", "gte", "lte", "contains"}
-        unknown = set(expected) - allowed
-        if unknown:
-            raise ValueError(f"Unsupported rule operator(s): {', '.join(sorted(unknown))}")
+        if "any_of" in expected:
+            sub_conditions = expected["any_of"]
+            if not isinstance(sub_conditions, list):
+                raise ValueError("'any_of' must be a list of operator maps")
+            return any(
+                self._matches_operator(sub, actual) for sub in sub_conditions
+            )
+        if "all_of" in expected:
+            sub_conditions = expected["all_of"]
+            if not isinstance(sub_conditions, list):
+                raise ValueError("'all_of' must be a list of operator maps")
+            return all(
+                self._matches_operator(sub, actual) for sub in sub_conditions
+            )
 
         if "equals" in expected:
-            if len(expected) > 1:
-                raise ValueError("'equals' cannot be combined with other operators.")
             return actual == expected["equals"]
 
-        if "contains" in expected and len(expected) > 1:
-            raise ValueError("'contains' cannot be combined with other operators.")
+        if "not_equals" in expected:
+            return actual != expected["not_equals"]
 
-        if actual is None:
-            return False
-        if "gte" in expected:
-            if not isinstance(actual, int):
-                return False
-            if actual < expected["gte"]:
-                return False
-        if "lte" in expected:
-            if not isinstance(actual, int):
-                return False
-            if actual > expected["lte"]:
-                return False
         if "contains" in expected:
             return isinstance(actual, list) and expected["contains"] in actual
 
-        if not expected:
-            raise ValueError("Operator block cannot be empty.")
+        if "not_contains" in expected:
+            return not isinstance(actual, list) or expected["not_contains"] not in actual
+
+        if "in" in expected:
+            members = expected["in"]
+            if not isinstance(members, list):
+                raise ValueError("'in' must be a list")
+            return actual in members
+
+        if actual is None:
+            return False
+
+        if "between" in expected:
+            bounds = expected["between"]
+            if not isinstance(bounds, list) or len(bounds) != 2:
+                raise ValueError("'between' must be a 2-element list")
+            if not isinstance(actual, int):
+                return False
+            low, high = bounds
+            if actual < low or actual > high:
+                return False
+
+        if "gt" in expected:
+            if not isinstance(actual, int) or actual <= expected["gt"]:
+                return False
+        if "gte" in expected:
+            if not isinstance(actual, int) or actual < expected["gte"]:
+                return False
+        if "lt" in expected:
+            if not isinstance(actual, int) or actual >= expected["lt"]:
+                return False
+        if "lte" in expected:
+            if not isinstance(actual, int) or actual > expected["lte"]:
+                return False
+
         return True

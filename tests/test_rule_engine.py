@@ -203,9 +203,8 @@ def test_rule_engine_rejects_mixed_equals_operator(tmp_path):
         encoding="utf-8",
     )
 
-    engine = RuleEngine(load_rules(rules_path))
     with pytest.raises(ValueError, match="cannot be combined"):
-        engine.match(date(2026, 4, 1), {"days_before_cpi": 1})
+        load_rules(rules_path)
 
 
 def test_rule_engine_requires_fallback_rule():

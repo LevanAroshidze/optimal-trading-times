@@ -1,14 +1,32 @@
 from __future__ import annotations
 
+import logging
 from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from bot.calendar_source import CalendarSourceError
 from bot.config import AppConfig, ScheduleConfig, WeeklyScheduleConfig
 from bot.formatter import DiscordFormatter
-from bot.state_store import BotState, DailyPostState, RecheckState, StateStore, WeeklyPostState
-from bot.type_defs import SourceStatus, SummaryServiceProtocol
-from bot.webhook_sender import DiscordWebhookSender
+from bot.state_store import (
+    BotState,
+    DailyPostState,
+    OperationsState,
+    RecheckState,
+    StateStore,
+    WeeklyPostState,
+)
+from bot.type_defs import (
+    PostKind,
+    SourceStatus,
+    SummaryServiceProtocol,
+    WebhookSenderProtocol,
+)
+from bot.webhook_sender import WebhookError
+
+logger = logging.getLogger(__name__)
+
+
+_WEEKEND_DAYS = {"SAT", "SUN"}
 
 
 class TradingCalendarNotifier:
@@ -17,129 +35,319 @@ class TradingCalendarNotifier:
         app_config: AppConfig,
         summary_service: SummaryServiceProtocol,
         formatter: DiscordFormatter,
-        sender: DiscordWebhookSender,
+        sender: WebhookSenderProtocol,
         state_store: StateStore,
+        *,
+        dry_run: bool = False,
+        force_kind: PostKind | None = None,
     ) -> None:
         self.app_config = app_config
         self.summary_service = summary_service
         self.formatter = formatter
         self.sender = sender
         self.state_store = state_store
+        self.dry_run = dry_run
+        self.force_kind = force_kind
 
-    async def run_once(self, now: datetime | None = None) -> list[str]:
+    async def run_once(
+        self,
+        now: datetime | None = None,
+        target_date_override: date | None = None,
+    ) -> list[str]:
         now = now or datetime.now(tz=UTC)
-        state = self.state_store.load()
         sent_messages: list[str] = []
 
-        daily_target = self._schedule_date(now, self.app_config.morning_summary)
-        daily_key = self._date_key(daily_target)
-        daily_due = self._is_due(now, self.app_config.morning_summary) and (
-            state.daily.posted_for_date != daily_key
-        )
-
-        weekly_target = self._weekly_target_week_start(now, self.app_config.weekly_outlook)
-        weekly_due = weekly_target is not None and (
-            state.weekly.posted_for_week_start != self._date_key(weekly_target)
-        )
-
-        recheck_target = self._schedule_date(now, self.app_config.morning_summary)
-        recheck_key = self._date_key(recheck_target)
-        recheck_due = self._is_due(now, self.app_config.ny_recheck) and (
-            state.recheck.checked_for_date != recheck_key
-        )
-
-        if not (daily_due or weekly_due or recheck_due):
-            return sent_messages
-
-        source_status: SourceStatus = "live"
-        try:
-            events = await self.summary_service.load_events()
-        except CalendarSourceError:
-            events = []
-            source_status = "unavailable"
-        todays_outlook = None
-
-        if daily_due:
-            todays_outlook = self.summary_service.build_outlook_for_date(
-                daily_target,
-                events,
-                source_status,
+        with self.state_store.lock():
+            state = self.state_store.load()
+            state_was_saved = False
+            previous_daily = DailyPostState(
+                posted_for_date=state.daily.posted_for_date,
+                fingerprint=state.daily.fingerprint,
+                snapshot=list(state.daily.snapshot),
             )
-            message = self.formatter.format_daily(todays_outlook)
-            await self._send_and_record(
-                message,
-                sent_messages,
-                state,
-                "daily",
-                DailyPostState(
-                    posted_for_date=daily_key,
-                    fingerprint=self.summary_service.daily_fingerprint(todays_outlook),
-                    snapshot=todays_outlook.calendar_snapshot,
-                ),
+
+            daily_target = target_date_override or self._schedule_date(
+                now, self.app_config.morning_summary
             )
-        if weekly_due and weekly_target is not None:
-            weekly_outlook = self.summary_service.build_weekly_outlook(
-                weekly_target,
-                events,
-                source_status,
+            daily_key = self._date_key(daily_target)
+            daily_due = self._is_kind_due(
+                "daily", now, state, daily_key, daily_target
             )
-            if weekly_outlook is not None:
-                message = self.formatter.format_weekly(weekly_outlook)
-                await self._send_and_record(
-                    message,
-                    sent_messages,
-                    state,
-                    "weekly",
-                    WeeklyPostState(
-                        posted_for_week_start=self._date_key(weekly_target),
-                    ),
+
+            weekly_target = self._weekly_target_week_start(
+                now, self.app_config.weekly_outlook
+            )
+            if self.force_kind == "weekly" and weekly_target is None:
+                weekly_target = (target_date_override or daily_target) - timedelta(
+                    days=(target_date_override or daily_target).weekday()
                 )
+            weekly_due = self._is_kind_due(
+                "weekly", now, state, weekly_target, daily_target
+            )
 
-        if recheck_due:
-            if todays_outlook is None:
+            recheck_target = target_date_override or self._schedule_date(
+                now, self.app_config.ny_recheck
+            )
+            recheck_key = self._date_key(recheck_target)
+            recheck_due = self._is_kind_due(
+                "recheck", now, state, recheck_key, recheck_target
+            )
+
+            if not (daily_due or weekly_due or recheck_due):
+                logger.info(
+                    "notifier_idle daily_due=%s weekly_due=%s recheck_due=%s",
+                    daily_due,
+                    weekly_due,
+                    recheck_due,
+                )
+                return sent_messages
+
+            source_status, events, operations_changed = await self._load_events(state)
+
+            todays_outlook = None
+            if daily_due:
                 todays_outlook = self.summary_service.build_outlook_for_date(
-                    recheck_target, events, source_status
+                    daily_target, events, source_status
                 )
-            if source_status == "live" and state.daily.fingerprint:
-                current_fingerprint = self.summary_service.daily_fingerprint(todays_outlook)
-                next_recheck_state = RecheckState(checked_for_date=recheck_key)
-                if current_fingerprint != state.daily.fingerprint:
-                    changed_items = self._changed_items(
-                        state.daily.snapshot, todays_outlook.calendar_snapshot
-                    )
-                    message = self.formatter.format_update(todays_outlook, changed_items)
-                    next_recheck_state = RecheckState(checked_for_date=recheck_key)
+                message = self.formatter.format_daily(todays_outlook)
+                fingerprint = self.summary_service.daily_fingerprint(todays_outlook)
+                next_state = DailyPostState(
+                    posted_for_date=daily_key,
+                    fingerprint=fingerprint,
+                    snapshot=todays_outlook.calendar_snapshot,
+                )
+                await self._send_and_record(
+                    message, sent_messages, state, "daily", next_state
+                )
+                state_was_saved = not self.dry_run
+            else:
+                logger.info(
+                    "daily_skipped reason=%s", self._skip_reason("daily", now, state, daily_key, daily_target)
+                )
+
+            if weekly_due and weekly_target is not None:
+                weekly_outlook = self.summary_service.build_weekly_outlook(
+                    weekly_target, events, source_status
+                )
+                if weekly_outlook is not None:
+                    message = self.formatter.format_weekly(weekly_outlook)
                     await self._send_and_record(
                         message,
                         sent_messages,
                         state,
-                        "recheck",
-                        next_recheck_state,
+                        "weekly",
+                        WeeklyPostState(
+                            posted_for_week_start=self._date_key(weekly_target)
+                        ),
                     )
+                    state_was_saved = not self.dry_run
                 else:
-                    state.recheck = RecheckState(checked_for_date=recheck_key)
-                    self.state_store.save(state)
+                    logger.info(
+                        "weekly_skipped reason=no_events week_start=%s",
+                        weekly_target,
+                    )
+
+            if recheck_due:
+                if todays_outlook is None or todays_outlook.target_date != recheck_target:
+                    todays_outlook = self.summary_service.build_outlook_for_date(
+                        recheck_target, events, source_status
+                    )
+                baseline = state.daily
+                if daily_due and daily_key != recheck_key:
+                    baseline = previous_daily
+                if source_status != "live":
+                    logger.info("recheck_skipped reason=source_unavailable")
+                elif not baseline.fingerprint:
+                    logger.info("recheck_skipped reason=no_baseline_fingerprint")
+                else:
+                    current_fp = self.summary_service.daily_fingerprint(todays_outlook)
+                    if current_fp != baseline.fingerprint:
+                        changed_items = self._changed_items(
+                            baseline.snapshot, todays_outlook.calendar_snapshot
+                        )
+                        update = self.formatter.format_update(
+                            todays_outlook, changed_items
+                        )
+                        await self._send_and_record(
+                            update,
+                            sent_messages,
+                            state,
+                            "recheck",
+                            RecheckState(checked_for_date=recheck_key),
+                        )
+                        state_was_saved = not self.dry_run
+                    else:
+                        logger.info(
+                            "recheck_unchanged date=%s", recheck_key
+                        )
+                        state.recheck = RecheckState(checked_for_date=recheck_key)
+                        if not self.dry_run:
+                            self.state_store.save(state)
+                            state_was_saved = True
+
+            if operations_changed and not state_was_saved and not self.dry_run:
+                self.state_store.save(state)
+                logger.info(
+                    "operations_state_saved source_status=%s consecutive_failures=%s",
+                    state.operations.last_source_status,
+                    state.operations.consecutive_source_failures,
+                )
 
         return sent_messages
+
+    async def _load_events(
+        self, state: BotState
+    ) -> tuple[SourceStatus, list, bool]:
+        previous = state.operations
+        try:
+            events = await self.summary_service.load_events()
+        except CalendarSourceError as error:
+            state.operations = OperationsState(
+                consecutive_source_failures=previous.consecutive_source_failures + 1,
+                last_source_status="unavailable",
+            )
+            logger.warning(
+                "calendar_unavailable consecutive_failures=%s error=%s",
+                state.operations.consecutive_source_failures,
+                error,
+            )
+            return "unavailable", [], True
+        else:
+            state.operations = OperationsState(
+                consecutive_source_failures=0, last_source_status="live"
+            )
+            operations_changed = state.operations != previous
+            return "live", events, operations_changed
 
     async def _send_and_record(
         self,
         message: str,
         sent_messages: list[str],
         state: BotState,
-        state_attr: str,
+        kind: PostKind,
         next_state: DailyPostState | WeeklyPostState | RecheckState,
     ) -> None:
-        await self.sender.send_message(message)
+        if self.dry_run:
+            logger.info("dry_run_message kind=%s length=%s", kind, len(message))
+            sent_messages.append(message)
+            self._apply_state_update(state, kind, next_state)
+            return
+        try:
+            await self.sender.send_message(message)
+        except WebhookError as error:
+            logger.error("webhook_send_failed kind=%s error=%s", kind, error)
+            raise
+
         sent_messages.append(message)
-        setattr(state, state_attr, next_state)
+        self._apply_state_update(state, kind, next_state)
         self.state_store.save(state)
+        logger.info("posted kind=%s length=%s", kind, len(message))
+
+    @staticmethod
+    def _apply_state_update(
+        state: BotState,
+        kind: PostKind,
+        next_state: DailyPostState | WeeklyPostState | RecheckState,
+    ) -> None:
+        match kind:
+            case "daily":
+                assert isinstance(next_state, DailyPostState)
+                state.daily = next_state
+            case "weekly":
+                assert isinstance(next_state, WeeklyPostState)
+                state.weekly = next_state
+            case "recheck":
+                assert isinstance(next_state, RecheckState)
+                state.recheck = next_state
+
+    def _is_kind_due(
+        self,
+        kind: PostKind,
+        now: datetime,
+        state: BotState,
+        key: str | date | None,
+        target_date: date | None,
+    ) -> bool:
+        if self.force_kind == kind:
+            return True
+        if self.force_kind is not None and self.force_kind != kind:
+            return False
+
+        if kind == "daily":
+            if not isinstance(key, str) or target_date is None:
+                return False
+            if state.daily.posted_for_date == key:
+                return False
+            if not self._is_due(now, self.app_config.morning_summary):
+                return False
+            if self._is_post_too_late(now, self.app_config.morning_summary):
+                return False
+            if (
+                not self.app_config.policy.post_on_weekend
+                and self._weekday_code(target_date) in _WEEKEND_DAYS
+            ):
+                return False
+            return True
+
+        if kind == "weekly":
+            if not isinstance(key, date):
+                return False
+            if state.weekly.posted_for_week_start == self._date_key(key):
+                return False
+            return True
+
+        if kind == "recheck":
+            if not isinstance(key, str):
+                return False
+            if state.recheck.checked_for_date == key:
+                return False
+            if not self._is_due(now, self.app_config.ny_recheck):
+                return False
+            if self._is_post_too_late(now, self.app_config.ny_recheck):
+                return False
+            return True
+
+        return False
+
+    def _skip_reason(
+        self,
+        kind: PostKind,
+        now: datetime,
+        state: BotState,
+        key: str,
+        target_date: date,
+    ) -> str:
+        if state.daily.posted_for_date == key:
+            return "already_posted"
+        if not self._is_due(now, self.app_config.morning_summary):
+            return "not_due_yet"
+        if self._is_post_too_late(now, self.app_config.morning_summary):
+            return "post_window_expired"
+        if (
+            not self.app_config.policy.post_on_weekend
+            and self._weekday_code(target_date) in _WEEKEND_DAYS
+        ):
+            return "weekend_skip"
+        return "unknown"
+
+    def _is_post_too_late(self, now: datetime, schedule: ScheduleConfig) -> bool:
+        local_now = now.astimezone(ZoneInfo(schedule.timezone))
+        threshold = local_now.replace(
+            hour=schedule.hour, minute=schedule.minute, second=0, microsecond=0
+        )
+        if local_now < threshold:
+            return False
+        delta = local_now - threshold
+        return delta > timedelta(minutes=self.app_config.policy.max_post_age_minutes)
 
     def _schedule_date(self, now: datetime, schedule: ScheduleConfig) -> date:
         return now.astimezone(ZoneInfo(schedule.timezone)).date()
 
     def _date_key(self, value: date) -> str:
         return value.isoformat()
+
+    def _weekday_code(self, value: date) -> str:
+        return value.strftime("%a").upper()[:3]
 
     def _schedule_clock(self, local_now: datetime) -> tuple[int, int]:
         return local_now.hour, local_now.minute
@@ -179,8 +387,8 @@ class TradingCalendarNotifier:
         return changed
 
     def _describe_snapshot_item(self, item: str) -> str:
-        prefix, _, value = item.partition(":")
-        if not _:
+        prefix, sep, value = item.partition(":")
+        if not sep:
             return item
         if prefix == "strong_today":
             return f"strongest USD news: {value}"
@@ -193,6 +401,10 @@ class TradingCalendarNotifier:
                 return "a full USD holiday on the calendar"
             if value == "partial":
                 return "a partial holiday or early close on the calendar"
+            return f"an unknown USD holiday marker: {value}"
         if prefix == "quiet":
             return "the quiet-day note"
         return value
+
+
+__all__ = ["TradingCalendarNotifier"]
