@@ -83,6 +83,7 @@ class PolicyConfig:
     post_on_weekend: bool = True
     max_consecutive_source_failures: int = 3
     duplicate_post_warning: bool = True
+    calendar_cache_max_age_hours: int = 72
 
 
 @dataclass(frozen=True)
@@ -100,6 +101,7 @@ class AppConfig:
 @dataclass(frozen=True)
 class EventAliasConfig:
     title_aliases: dict[str, tuple[str, ...]]
+    title_excludes: dict[str, tuple[str, ...]] = field(default_factory=dict)
     strongest_categories: tuple[str, ...] = ()
     partial_holiday_terms: tuple[str, ...] = ()
 
@@ -114,6 +116,9 @@ class MessagesConfig:
     other_red_news_advice: str = "Avoid the 2-3 hours before the release."
     calendar_unavailable_note: str = (
         "Calendar source unavailable. Posting the fail-safe plan."
+    )
+    calendar_cached_note: str = (
+        "Calendar source unavailable. Using cached calendar data."
     )
     update_header: str = "Update: the calendar changed after the morning post."
     week_ahead_header: str = "Week Ahead"
@@ -170,6 +175,7 @@ _ALLOWED_POLICY_KEYS = frozenset(
         "post_on_weekend",
         "max_consecutive_source_failures",
         "duplicate_post_warning",
+        "calendar_cache_max_age_hours",
     }
 )
 _ALLOWED_RULE_OPERATORS = frozenset(
@@ -309,6 +315,18 @@ def load_app_config(path: Path) -> AppConfig:
 
 def load_event_aliases(path: Path) -> EventAliasConfig:
     raw = _expect_mapping(_load_yaml(path), path.name)
+    _reject_unknown_keys(
+        raw,
+        frozenset(
+            {
+                "strongest_categories",
+                "partial_holiday_terms",
+                "title_aliases",
+                "title_excludes",
+            }
+        ),
+        path.name,
+    )
     title_aliases = {
         _expect_string(category, "title_aliases key"): tuple(
             item.casefold()
@@ -318,8 +336,18 @@ def load_event_aliases(path: Path) -> EventAliasConfig:
             raw.get("title_aliases", {}), "title_aliases"
         ).items()
     }
+    title_excludes = {
+        _expect_string(category, "title_excludes key"): tuple(
+            item.casefold()
+            for item in _expect_string_list(values, f"title_excludes.{category}")
+        )
+        for category, values in _expect_mapping(
+            raw.get("title_excludes", {}), "title_excludes"
+        ).items()
+    }
     return EventAliasConfig(
         title_aliases=title_aliases,
+        title_excludes=title_excludes,
         strongest_categories=tuple(
             _expect_string_list(
                 raw.get("strongest_categories", []), "strongest_categories"
@@ -353,6 +381,10 @@ def load_messages(path: Path | None) -> MessagesConfig:
                 "calendar_unavailable_note", defaults.calendar_unavailable_note
             ),
             "messages.calendar_unavailable_note",
+        ),
+        calendar_cached_note=_expect_string(
+            raw.get("calendar_cached_note", defaults.calendar_cached_note),
+            "messages.calendar_cached_note",
         ),
         update_header=_expect_string(
             raw.get("update_header", defaults.update_header), "messages.update_header"
@@ -575,11 +607,21 @@ def _load_policy_config(raw: StructuredValue | None) -> PolicyConfig:
     )
     if not isinstance(duplicate_warning_raw, bool):
         raise ConfigError("policy.duplicate_post_warning must be a boolean")
+    cache_max_age = _coerce_int(
+        mapping.get(
+            "calendar_cache_max_age_hours",
+            defaults.calendar_cache_max_age_hours,
+        ),
+        "policy.calendar_cache_max_age_hours",
+    )
+    if cache_max_age <= 0:
+        raise ConfigError("policy.calendar_cache_max_age_hours must be positive")
     return PolicyConfig(
         max_post_age_minutes=max_age,
         post_on_weekend=post_weekend_raw,
         max_consecutive_source_failures=failures,
         duplicate_post_warning=duplicate_warning_raw,
+        calendar_cache_max_age_hours=cache_max_age,
     )
 
 

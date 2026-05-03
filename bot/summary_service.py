@@ -41,7 +41,7 @@ class DailySummaryService:
         events: list[CalendarEvent],
         source_status: SourceStatus = "live",
     ) -> DailyOutlook:
-        if source_status != "live":
+        if source_status == "unavailable":
             decision = DailyDecision.calendar_unavailable(target_date)
             return DailyOutlook(
                 decision=decision,
@@ -69,7 +69,7 @@ class DailySummaryService:
         events: list[CalendarEvent],
         source_status: SourceStatus = "live",
     ) -> WeeklyOutlook | None:
-        if source_status != "live":
+        if source_status == "unavailable":
             return None
         if not self._has_any_events_for_week(week_start, events):
             return None
@@ -80,7 +80,7 @@ class DailySummaryService:
             days.append(
                 self.build_outlook_for_date(target_date, events, source_status)
             )
-        return WeeklyOutlook(week_start=week_start, days=days)
+        return WeeklyOutlook(week_start=week_start, days=days, source_status=source_status)
 
     def daily_fingerprint(self, outlook: DailyOutlook) -> str:
         payload = [

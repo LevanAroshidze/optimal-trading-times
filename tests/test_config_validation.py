@@ -8,6 +8,7 @@ from bot.config import (
     ConfigError,
     find_rule_priority_collisions,
     load_app_config,
+    load_event_aliases,
     load_messages,
     load_rules,
 )
@@ -52,6 +53,7 @@ def test_load_app_config_accepts_minimal_valid_file(tmp_path):
     config = load_app_config(_write(tmp_path, _VALID_BASE))
     assert config.calendar.market_timezone == "America/New_York"
     assert config.policy.post_on_weekend is True
+    assert config.policy.calendar_cache_max_age_hours == 72
     assert "London" in config.windows.session_windows
 
 
@@ -173,3 +175,26 @@ def test_find_rule_priority_collisions_flags_overlapping_rules():
 def test_load_messages_returns_defaults_when_missing(tmp_path):
     messages = load_messages(tmp_path / "missing.yaml")
     assert "Wait 15-30 minutes" in messages.strong_news_advice
+    assert "cached" in messages.calendar_cached_note.casefold()
+
+
+def test_load_event_aliases_accepts_title_excludes(tmp_path):
+    path = tmp_path / "event_aliases.yaml"
+    path.write_text(
+        """
+strongest_categories:
+  - NFP
+title_aliases:
+  NFP:
+    - non-farm employment change
+title_excludes:
+  NFP:
+    - adp
+""",
+        encoding="utf-8",
+    )
+
+    aliases = load_event_aliases(path)
+
+    assert aliases.title_aliases["NFP"] == ("non-farm employment change",)
+    assert aliases.title_excludes["NFP"] == ("adp",)

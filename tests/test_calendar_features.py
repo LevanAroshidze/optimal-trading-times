@@ -48,6 +48,72 @@ def test_calendar_feature_builder_detects_nfp_and_powell_offset():
     assert powell_previous_day_features["days_until_powell_10am"] == 1
 
 
+def test_calendar_feature_builder_does_not_treat_adp_as_nfp():
+    aliases = make_aliases(
+        title_aliases={"NFP": ["non-farm employment change"]},
+        title_excludes={"NFP": ["adp"]},
+    )
+    builder = _builder(aliases)
+
+    events = [
+        CalendarEvent(
+            title="ADP Non-Farm Employment Change",
+            country="USD",
+            impact="High",
+            starts_at=datetime.fromisoformat("2026-05-06T08:15:00-04:00"),
+        )
+    ]
+
+    analysis = builder.analyse_date(date(2026, 5, 6), events)
+
+    assert analysis.features["week_type"] is None
+    assert analysis.strongest_news_today == []
+    assert analysis.other_red_news_today == [
+        "ADP Non-Farm Employment Change at 8:15 AM NY time"
+    ]
+
+
+def test_calendar_feature_builder_still_treats_official_release_as_nfp():
+    aliases = make_aliases(
+        title_aliases={"NFP": ["non-farm employment change"]},
+        title_excludes={"NFP": ["adp"]},
+    )
+    builder = _builder(aliases)
+
+    events = [
+        CalendarEvent(
+            title="Non-Farm Employment Change",
+            country="USD",
+            impact="High",
+            starts_at=datetime.fromisoformat("2026-05-08T08:30:00-04:00"),
+        )
+    ]
+
+    analysis = builder.analyse_date(date(2026, 5, 8), events)
+
+    assert analysis.features["week_type"] == "NFP"
+    assert analysis.strongest_news_today == ["NFP at 8:30 AM NY time"]
+
+
+def test_calendar_feature_builder_ignores_medium_impact_strong_alias():
+    aliases = make_aliases(title_aliases={"CPI": ["cpi"]})
+    builder = _builder(aliases)
+
+    events = [
+        CalendarEvent(
+            title="CPI m/m",
+            country="USD",
+            impact="Medium",
+            starts_at=datetime.fromisoformat("2026-04-02T08:30:00-04:00"),
+        )
+    ]
+
+    analysis = builder.analyse_date(date(2026, 4, 2), events)
+
+    assert analysis.features["has_cpi_today"] is False
+    assert analysis.strongest_news_today == []
+
+
 def test_calendar_feature_builder_detects_830_red_news():
     aliases = make_aliases(title_aliases={"RED_830AM": ["unemployment claims"]})
     builder = _builder(aliases)
@@ -261,5 +327,4 @@ def test_calendar_feature_builder_applies_non_core_pressure_overlay():
 
     assert analysis.pressure_overlay["PreMarket"] == DayColor.RED
     assert analysis.pressure_overlay["NY_AM_FIRST_HALF"] == DayColor.RED
-
 

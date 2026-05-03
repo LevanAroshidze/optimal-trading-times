@@ -4,12 +4,15 @@ import contextlib
 import json
 import os
 import secrets
-from collections.abc import Mapping
+import time
+from collections.abc import Callable, Mapping
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Literal
 
+from bot.models import CalendarEvent
 from bot.type_defs import (
     BotStatePayload,
     StateSection,
@@ -17,7 +20,10 @@ from bot.type_defs import (
     StructuredValue,
 )
 
-STATE_SCHEMA_VERSION = 1
+STATE_SCHEMA_VERSION = 2
+_LOCK_ACQUIRE_ATTEMPTS = 50
+_LOCK_RETRY_SLEEP_SECONDS = 0.05
+_LOCK_STALE_AFTER_SECONDS = 600
 
 
 @dataclass
@@ -41,6 +47,13 @@ class WeeklyPostState:
 class OperationsState:
     consecutive_source_failures: int = 0
     last_source_status: str | None = None
+    alerted_keys: list[str] = field(default_factory=list)
+
+
+@dataclass
+class CalendarCacheState:
+    fetched_at: str | None = None
+    events: list[CalendarEvent] = field(default_factory=list)
 
 
 @dataclass
@@ -49,6 +62,7 @@ class BotState:
     recheck: RecheckState = field(default_factory=RecheckState)
     weekly: WeeklyPostState = field(default_factory=WeeklyPostState)
     operations: OperationsState = field(default_factory=OperationsState)
+    calendar_cache: CalendarCacheState = field(default_factory=CalendarCacheState)
 
 
 _StateField = Literal["daily", "weekly", "recheck", "operations"]
@@ -58,11 +72,17 @@ class StateStore:
     def __init__(self, path: Path, lock_path: Path | None = None) -> None:
         self.path = path
         self.lock_path = lock_path
+        self._stale_lock_recovered = False
 
     def lock(self) -> AbstractContextManager[None]:
         if self.lock_path is None:
             return nullcontext()
-        return _FileLock(self.lock_path)
+        return _FileLock(self.lock_path, self._mark_stale_lock_recovered)
+
+    def consume_stale_lock_recovered(self) -> bool:
+        recovered = self._stale_lock_recovered
+        self._stale_lock_recovered = False
+        return recovered
 
     def load(self) -> BotState:
         if not self.path.exists():
@@ -78,6 +98,7 @@ class StateStore:
         recheck = payload.get("recheck", {})
         weekly = payload.get("weekly", {})
         operations = payload.get("operations", {})
+        calendar_cache = payload.get("calendar_cache", {})
 
         return BotState(
             daily=DailyPostState(
@@ -96,6 +117,11 @@ class StateStore:
                     operations.get("consecutive_source_failures") or 0
                 ),
                 last_source_status=operations.get("last_source_status"),
+                alerted_keys=list(operations.get("alerted_keys", [])),
+            ),
+            calendar_cache=CalendarCacheState(
+                fetched_at=calendar_cache.get("fetched_at"),
+                events=self._events_from_payload(calendar_cache.get("events", [])),
             ),
         )
 
@@ -117,22 +143,39 @@ class StateStore:
             "operations": {
                 "consecutive_source_failures": state.operations.consecutive_source_failures,
                 "last_source_status": state.operations.last_source_status,
+                "alerted_keys": state.operations.alerted_keys,
+            },
+            "calendar_cache": {
+                "fetched_at": state.calendar_cache.fetched_at,
+                "events": [
+                    {
+                        "title": event.title,
+                        "country": event.country,
+                        "impact": event.impact,
+                        "starts_at": event.starts_at.isoformat(),
+                    }
+                    for event in state.calendar_cache.events
+                ],
             },
         }
         suffix = f".tmp-{os.getpid()}-{secrets.token_hex(4)}"
         temp_path = self.path.with_name(self.path.name + suffix)
-        temp_path.write_text(
-            json.dumps(payload, indent=2, sort_keys=True),
-            encoding="utf-8",
-        )
-        temp_path.replace(self.path)
+        try:
+            temp_path.write_text(
+                json.dumps(payload, indent=2, sort_keys=True),
+                encoding="utf-8",
+            )
+            temp_path.replace(self.path)
+        except OSError:
+            with contextlib.suppress(FileNotFoundError):
+                temp_path.unlink()
+            raise
 
     def _coerce_payload(self, raw: StructuredValue) -> BotStatePayload:
         if not isinstance(raw, Mapping):
             raise RuntimeError(f"State file root must be a JSON object: {self.path}")
         root = {str(key): item for key, item in raw.items()}
-        version_raw = root.get("schema_version") or 0
-        version = version_raw if isinstance(version_raw, int) else 0
+        version = self._coerce_schema_version(root.get("schema_version"))
         return {
             "schema_version": version,
             "daily": self._coerce_section(root.get("daily"), "state.daily"),
@@ -141,7 +184,22 @@ class StateStore:
             "operations": self._coerce_section(
                 root.get("operations"), "state.operations"
             ),
+            "calendar_cache": self._coerce_section(
+                root.get("calendar_cache"), "state.calendar_cache"
+            ),
         }
+
+    def _coerce_schema_version(self, value: StructuredValue | None) -> int:
+        if value is None:
+            return 0
+        if not isinstance(value, int) or isinstance(value, bool):
+            return 0
+        if value > STATE_SCHEMA_VERSION:
+            raise RuntimeError(
+                f"State file schema_version {value} is newer than supported "
+                f"{STATE_SCHEMA_VERSION}: {self.path}"
+            )
+        return value
 
     def _coerce_section(self, value: StructuredValue | None, name: str) -> StateSection:
         if value is None:
@@ -178,7 +236,20 @@ class StateStore:
                 payload["last_source_status"] = self._optional_string(
                     item, f"{name}.last_source_status"
                 )
+            elif key == "alerted_keys" and name == "state.operations":
+                payload["alerted_keys"] = self._string_list(
+                    item, f"{name}.alerted_keys"
+                )
+            elif key == "fetched_at" and name == "state.calendar_cache":
+                payload["fetched_at"] = self._optional_string(
+                    item, f"{name}.fetched_at"
+                )
+            elif key == "events" and name == "state.calendar_cache":
+                payload["events"] = self._event_list(item, f"{name}.events")
         return payload
+
+    def _mark_stale_lock_recovered(self) -> None:
+        self._stale_lock_recovered = True
 
     def _expect_mapping(self, value: StructuredValue, name: str) -> StructuredMapping:
         if not isinstance(value, Mapping):
@@ -202,17 +273,70 @@ class StateStore:
             strings.append(item)
         return strings
 
+    def _event_list(
+        self, value: StructuredValue, name: str
+    ) -> list[StructuredMapping]:
+        if not isinstance(value, list):
+            raise RuntimeError(f"{name} must be a list of event objects")
+        events: list[StructuredMapping] = []
+        for item in value:
+            event = self._expect_mapping(item, name)
+            events.append(event)
+        return events
+
+    def _events_from_payload(
+        self, items: object
+    ) -> list[CalendarEvent]:
+        if not isinstance(items, list):
+            return []
+        events: list[CalendarEvent] = []
+        for index, item in enumerate(items):
+            event = self._expect_mapping(item, f"state.calendar_cache.events.{index}")
+            title = self._required_string(event.get("title"), f"cache event {index}.title")
+            country = self._required_string(
+                event.get("country"), f"cache event {index}.country"
+            )
+            impact = self._required_string(
+                event.get("impact"), f"cache event {index}.impact"
+            )
+            starts_raw = self._required_string(
+                event.get("starts_at"), f"cache event {index}.starts_at"
+            )
+            try:
+                starts_at = datetime.fromisoformat(starts_raw)
+            except ValueError as error:
+                raise RuntimeError(
+                    f"cache event {index}.starts_at must be ISO datetime"
+                ) from error
+            if starts_at.tzinfo is None:
+                raise RuntimeError(f"cache event {index}.starts_at must be timezone-aware")
+            events.append(
+                CalendarEvent(
+                    title=title,
+                    country=country,
+                    impact=impact,
+                    starts_at=starts_at,
+                )
+            )
+        return events
+
+    def _required_string(self, value: StructuredValue, name: str) -> str:
+        if not isinstance(value, str) or not value:
+            raise RuntimeError(f"{name} must be a non-empty string")
+        return value
+
 
 class _FileLock:
     """Simple advisory lock around a sentinel file. Best effort, not network-safe."""
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, on_stale_recovered: Callable[[], None]) -> None:
         self.path = path
         self._fd: int | None = None
+        self._on_stale_recovered = on_stale_recovered
 
     def __enter__(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        for _ in range(50):
+        for _ in range(_LOCK_ACQUIRE_ATTEMPTS):
             try:
                 self._fd = os.open(
                     str(self.path),
@@ -224,7 +348,7 @@ class _FileLock:
                 self._steal_stale_lock()
         raise RuntimeError(f"Could not acquire state lock: {self.path}")
 
-    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+    def __exit__(self, _exc_type: object, _exc: object, _tb: object) -> None:
         if self._fd is not None:
             os.close(self._fd)
             self._fd = None
@@ -236,10 +360,10 @@ class _FileLock:
             stat = self.path.stat()
         except FileNotFoundError:
             return
-        import time
 
-        if time.time() - stat.st_mtime > 600:
+        if time.time() - stat.st_mtime > _LOCK_STALE_AFTER_SECONDS:
             with contextlib.suppress(FileNotFoundError):
                 self.path.unlink()
+                self._on_stale_recovered()
         else:
-            time.sleep(0.05)
+            time.sleep(_LOCK_RETRY_SLEEP_SECONDS)

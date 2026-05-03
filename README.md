@@ -34,7 +34,7 @@ Each box is a small module under `bot/`. The `Notifier` orchestrates the schedul
 
 ## Current behavior
 
-- Pulls Forex Factory calendar events from `ff_calendar_thisweek.json` and `ff_calendar_nextweek.json`
+- Pulls Forex Factory calendar events from `ff_calendar_thisweek.json` by default; additional URLs can still be configured if ForexFactory exposes a stable alternate feed
 - Separates `Strongest USD news` from `Other red-folder USD news`
 - Applies your matrix rules from `config/rules.yaml`
 - Treats `no major USD news` days as their own white/caution model
@@ -59,6 +59,8 @@ Each box is a small module under `bot/`. The `Notifier` orchestrates the schedul
    ```bash
    python -m pip install -e '.[dev]'
    ```
+
+   If your local shell does not provide `python`, use `python3` for these commands.
 
 3. Copy `.env.example` to `.env` and fill in `DISCORD_WEBHOOK_URL`.
 4. Edit:
@@ -111,6 +113,9 @@ The application internally gates these schedules:
 - Weekly outlook: `21:00 Asia/Tbilisi` on Sunday
 
 A `policy.max_post_age_minutes` value (defaults to 240) prevents the bot from retroactively posting a stale "good morning" note hours later if state was lost.
+When `policy.post_on_weekend: false`, automatic Saturday/Sunday morning summaries and NY rechecks are suppressed. The Sunday `21:00 Asia/Tbilisi` weekly outlook still runs as the future-week overview.
+The bot stores last-known-good calendar events in `data/state.json` and can use fresh cached data for up to `policy.calendar_cache_max_age_hours` when the live calendar is unavailable. Cached posts are clearly marked.
+If `DISCORD_OPS_WEBHOOK_URL` is set, limited ops-only alerts are sent for repeated source failures, weekly no-data skips, and state-lock recovery/failure.
 
 ## Tests, lint, types
 
@@ -118,6 +123,12 @@ A `policy.max_post_age_minutes` value (defaults to 240) prevents the bot from re
 ruff check bot tests
 mypy bot
 pytest -q
+```
+
+For a rule/debug view of a week:
+
+```bash
+python -m bot --diagnose-week --target-date 2026-05-04
 ```
 
 CI runs ruff, mypy, vulture, and pytest on push and PR (`.github/workflows/ci.yml`).
@@ -133,5 +144,5 @@ CI runs ruff, mypy, vulture, and pytest on push and PR (`.github/workflows/ci.ym
 
 - `config/app.yaml` defines schedules, calendar URLs, session windows, news-window thresholds, and post-age policy.
 - Calendar logic uses `America/New_York`.
-- If the calendar source cannot be loaded, the announcer falls back to a red no-trade outlook.
+- If the calendar source cannot be loaded, the announcer uses fresh cached events when available; otherwise it falls back to a red no-trade outlook.
 - `data/state.json` is runtime state only and should not be committed.

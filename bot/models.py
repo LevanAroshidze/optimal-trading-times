@@ -150,3 +150,4 @@ class DailyOutlook:
 class WeeklyOutlook:
     week_start: date
     days: list[DailyOutlook] = field(default_factory=list)
+    source_status: SourceStatus = "live"

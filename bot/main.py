@@ -5,12 +5,12 @@ import asyncio
 import logging
 import os
 import sys
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from typing import get_args
 
 from bot.calendar_features import CalendarFeatureBuilder
-from bot.calendar_source import ForexFactoryCalendarSource
+from bot.calendar_source import CalendarSourceError, ForexFactoryCalendarSource
 from bot.config import (
     AppConfig,
     EventAliasConfig,
@@ -25,7 +25,7 @@ from bot.notifier import TradingCalendarNotifier
 from bot.rule_engine import RuleEngine
 from bot.state_store import StateStore
 from bot.summary_service import DailySummaryService
-from bot.type_defs import PostKind
+from bot.type_defs import PostKind, SourceStatus
 from bot.webhook_sender import DiscordWebhookSender, validate_webhook_url
 
 
@@ -59,6 +59,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--log-level",
         default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+    )
+    parser.add_argument(
+        "--diagnose-week",
+        action="store_true",
+        help="Print matched rules and extracted calendar features for the target week.",
     )
     return parser.parse_args(argv)
 
@@ -110,6 +115,7 @@ def _build_components(
     DailySummaryService,
     DiscordFormatter,
     DiscordWebhookSender | None,
+    DiscordWebhookSender | None,
     StateStore,
 ]:
     source = ForexFactoryCalendarSource(
@@ -123,6 +129,7 @@ def _build_components(
         aliases=aliases,
         market_timezone=app_config.calendar.market_timezone,
         windows=app_config.windows,
+        quiet_day_note=messages.quiet_day_note,
     )
     rule_engine = RuleEngine(rules)
     formatter = DiscordFormatter(messages=messages)
@@ -142,6 +149,7 @@ def _build_components(
     state_store = StateStore(state_path, lock_path=lock_path)
 
     sender: DiscordWebhookSender | None = None
+    ops_sender: DiscordWebhookSender | None = None
     if not dry_run:
         webhook_url = validate_webhook_url(
             os.getenv(app_config.delivery.webhook_url_env, ""),
@@ -151,27 +159,41 @@ def _build_components(
             webhook_url=webhook_url,
             timeout_seconds=app_config.calendar.timeout_seconds,
         )
+        if app_config.delivery.ops_webhook_url_env:
+            ops_webhook_raw = os.getenv(app_config.delivery.ops_webhook_url_env, "")
+            if ops_webhook_raw.strip():
+                ops_sender = DiscordWebhookSender(
+                    webhook_url=validate_webhook_url(
+                        ops_webhook_raw, app_config.delivery.ops_webhook_url_env
+                    ),
+                    timeout_seconds=app_config.calendar.timeout_seconds,
+                )
 
-    return summary_service, formatter, sender, state_store
+    return summary_service, formatter, sender, ops_sender, state_store
 
 
 async def _run_async(args: argparse.Namespace) -> int:
     config_dir = _config_dir_from(args)
     app_config, aliases, rules, messages = _load_all_config(config_dir)
-    summary_service, formatter, sender, state_store = _build_components(
+    summary_service, formatter, sender, ops_sender, state_store = _build_components(
         app_config,
         aliases,
         rules,
         messages,
-        dry_run=args.dry_run,
+        dry_run=args.dry_run or args.diagnose_week,
         config_dir=config_dir,
     )
+
+    if args.diagnose_week:
+        await _print_week_diagnostics(summary_service, args.target_date)
+        return 0
 
     notifier = TradingCalendarNotifier(
         app_config=app_config,
         summary_service=summary_service,
         formatter=formatter,
         sender=sender or _NoopSender(),
+        ops_sender=ops_sender,
         state_store=state_store,
         dry_run=args.dry_run,
         force_kind=args.force_kind,
@@ -183,9 +205,46 @@ async def _run_async(args: argparse.Namespace) -> int:
         for index, message in enumerate(sent, start=1):
             sys.stdout.write(f"--- message {index} ---\n{message}\n")
         if not sent:
-            sys.stdout.write("(no messages produced; nothing was due)\n")
+            if args.force_kind == "weekly":
+                sys.stdout.write(
+                    "(no weekly outlook produced; no live or fresh cached "
+                    "target-week calendar data was available)\n"
+                )
+            else:
+                sys.stdout.write("(no messages produced; nothing was due)\n")
 
     return 0
+
+
+async def _print_week_diagnostics(
+    summary_service: DailySummaryService, target_date: date | None
+) -> None:
+    target = target_date or date.today()
+    week_start = target - timedelta(days=target.weekday())
+    try:
+        events = await summary_service.load_events()
+        source_status: SourceStatus = "live"
+    except CalendarSourceError as error:
+        events = []
+        source_status = "unavailable"
+        sys.stdout.write(f"source_status={source_status} error={error}\n")
+
+    for offset in range(5):
+        day = week_start + timedelta(days=offset)
+        analysis = summary_service.feature_builder.analyse_date(day, events)
+        outlook = summary_service.build_outlook_for_date(day, events, source_status)
+        sessions = {
+            session: color.value
+            for session, color in outlook.decision.session_colors.items()
+        }
+        sys.stdout.write(
+            f"{day.isoformat()} source_status={source_status} "
+            f"rule={outlook.decision.rule_id} "
+            f"categories={analysis.features['categories_today']} "
+            f"strong={outlook.strongest_news_today} "
+            f"other={outlook.other_red_news_today} "
+            f"sessions={sessions}\n"
+        )
 
 
 class _NoopSender:

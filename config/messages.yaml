@@ -1,6 +1,7 @@
 strong_news_advice: Wait 15-30 minutes after the release before looking for trades.
 other_red_news_advice: Avoid the 2-3 hours before the release.
 calendar_unavailable_note: Calendar source unavailable. Posting the fail-safe plan.
+calendar_cached_note: Calendar source unavailable. Using cached calendar data.
 update_header: "Update: the calendar changed after the morning post."
 week_ahead_header: Week Ahead
 quiet_day_note: No major USD news. NY AM may be slower and lower-volatility than usual.

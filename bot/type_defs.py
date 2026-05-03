@@ -43,7 +43,7 @@ RuleOperatorMap = TypedDict(
 RuleConditionValue: TypeAlias = FeatureValue | RuleOperatorMap
 FeatureMap: TypeAlias = dict[str, FeatureValue]
 RuleConditions: TypeAlias = dict[str, RuleConditionValue]
-SourceStatus: TypeAlias = Literal["live", "unavailable"]
+SourceStatus: TypeAlias = Literal["live", "cached", "unavailable"]
 PostKind: TypeAlias = Literal["daily", "weekly", "recheck"]
 
 
@@ -83,6 +83,9 @@ class StateSection(TypedDict, total=False):
     posted_for_week_start: str | None
     consecutive_source_failures: int
     last_source_status: str | None
+    alerted_keys: list[str]
+    fetched_at: str | None
+    events: list[StructuredMapping]
 
 
 class BotStatePayload(TypedDict, total=False):
@@ -91,6 +94,7 @@ class BotStatePayload(TypedDict, total=False):
     recheck: StateSection
     weekly: StateSection
     operations: StateSection
+    calendar_cache: StateSection
 
 
 KNOWN_FEATURE_KEYS: frozenset[str] = frozenset(

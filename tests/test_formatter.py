@@ -105,3 +105,22 @@ def test_formatter_builds_weekly_message():
 
     assert message.startswith("Week Ahead")
     assert "Thu: White day. CPI day." in message
+
+
+def test_formatter_marks_cached_daily_and_weekly_messages():
+    outlook = make_outlook()
+    cached_daily = DailyOutlook(
+        decision=outlook.decision,
+        summary_reason=outlook.summary_reason,
+        source_status="cached",
+    )
+    weekly = WeeklyOutlook(
+        week_start=date(2026, 4, 20),
+        days=[cached_daily],
+        source_status="cached",
+    )
+
+    formatter = DiscordFormatter()
+
+    assert "Using cached calendar data" in formatter.format_daily(cached_daily)
+    assert "Using cached calendar data" in formatter.format_weekly(weekly)

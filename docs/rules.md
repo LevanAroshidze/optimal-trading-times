@@ -44,6 +44,8 @@ These are the values your `when:` block can reference. They are computed by `Cal
 | `strong_usd_news_tomorrow` | list[str] | Same, but for tomorrow. |
 | `other_red_usd_news_today` | list[str] | Other red-folder USD events today. |
 
+Strongest-category features only use high-impact USD events. Alias excludes in `config/event_aliases.yaml` can keep lookalike events out of a category; for example, ADP Non-Farm Employment Change is excluded from official NFP classification.
+
 ## Operators
 
 Within a `when` block you can use simple equality, list membership, or an operator block:

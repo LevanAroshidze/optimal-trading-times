@@ -5,7 +5,7 @@ import asyncio
 import httpx
 import pytest
 
-from bot.calendar_source import CalendarSourceError, ForexFactoryCalendarSource
+from bot.calendar_source import CalendarSourceError, FetchResult, ForexFactoryCalendarSource
 
 VALID_PAYLOAD = [
     {
@@ -15,11 +15,6 @@ VALID_PAYLOAD = [
         "impact": "High",
     }
 ]
-
-
-def _patch_client(source: ForexFactoryCalendarSource, transport: httpx.MockTransport):
-    source._build_client = lambda: httpx.AsyncClient(transport=transport)  # type: ignore[attr-defined]
-
 
 def test_partial_failure_uses_successful_url():
     """If one URL fails and another succeeds, surviving events are returned."""
@@ -130,6 +125,87 @@ def test_4xx_other_than_429_does_not_retry():
     result = asyncio.run(run())
     assert not result.succeeded
     assert counter["calls"] == 1
+
+
+def test_partial_fetch_failure_logs_info_when_success_exists(caplog):
+    source = ForexFactoryCalendarSource(["https://example.com/ok", "https://example.com/missing"])
+    successful = [
+        FetchResult(
+            url="https://example.com/ok",
+            payload=VALID_PAYLOAD,
+        )
+    ]
+    failed = [
+        FetchResult(
+            url="https://example.com/missing",
+            payload=None,
+            error="HTTP 404",
+        )
+    ]
+
+    with caplog.at_level("INFO", logger="bot.calendar_source"):
+        source._log_fetch_results(successful, failed)
+
+    assert "calendar_partial_success ok=1 failed=1" in caplog.text
+    assert all(record.levelname == "INFO" for record in caplog.records)
+
+
+def test_429_with_long_retry_after_does_not_retry_immediately():
+    counter = {"calls": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        counter["calls"] += 1
+        return httpx.Response(429, headers={"Retry-After": "300"})
+
+    transport = httpx.MockTransport(handler)
+    source = ForexFactoryCalendarSource(
+        urls=["https://example.com/a"],
+        timeout_seconds=1,
+        max_retries=3,
+        retry_backoff_seconds=0,
+    )
+
+    async def run():
+        async with httpx.AsyncClient(transport=transport) as client:
+            return await source._fetch_with_retries(client, source.urls[0])
+
+    result = asyncio.run(run())
+    assert not result.succeeded
+    assert result.error == "HTTP 429 retry_after=300s"
+    assert counter["calls"] == 1
+
+
+def test_event_parser_skips_malformed_items_without_dropping_valid_events():
+    source = ForexFactoryCalendarSource(["https://example.com/a"])
+    events, skipped = source._events_from_results(
+        [
+            FetchResult(
+                url="https://example.com/a",
+                payload=[
+                    *VALID_PAYLOAD,
+                    {"title": "", "country": "USD", "date": "2026-04-02T08:30:00-04:00"},
+                    {"title": "Bad date", "country": "USD", "date": "not-a-date"},
+                    {"title": "Naive date", "country": "USD", "date": "2026-04-02T08:30:00"},
+                ],
+            )
+        ]
+    )
+
+    assert len(events) == 1
+    assert skipped == 3
+
+
+def test_event_parser_deduplicates_events_across_successful_urls():
+    source = ForexFactoryCalendarSource(["https://example.com/a", "https://example.com/b"])
+    events, skipped = source._events_from_results(
+        [
+            FetchResult(url="https://example.com/a", payload=VALID_PAYLOAD),
+            FetchResult(url="https://example.com/b", payload=VALID_PAYLOAD),
+        ]
+    )
+
+    assert len(events) == 1
+    assert skipped == 0
 
 
 def test_user_agent_is_sent():

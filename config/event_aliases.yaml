@@ -43,3 +43,7 @@ title_aliases:
     - jolts job openings
     - ism manufacturing pmi
     - ism services pmi
+
+title_excludes:
+  NFP:
+    - adp

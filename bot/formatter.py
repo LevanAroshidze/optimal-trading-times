@@ -47,7 +47,7 @@ class DiscordFormatter:
             parts.append(outlook.quiet_note)
 
         if outlook.source_status != "live":
-            parts.append(self.messages.calendar_unavailable_note)
+            parts.append(self._source_status_note(outlook.source_status))
 
         return "\n".join(parts)
 
@@ -63,6 +63,8 @@ class DiscordFormatter:
         parts.extend(self._news_lines(outlook))
         if outlook.quiet_note:
             parts.append(outlook.quiet_note)
+        if outlook.source_status == "cached":
+            parts.append(self.messages.calendar_cached_note)
         return "\n".join(parts)
 
     def format_weekly(self, weekly: WeeklyOutlook) -> str:
@@ -81,6 +83,8 @@ class DiscordFormatter:
                     f"{self._join_items(outlook.other_red_news_today)}."
                 )
             parts.append(line.strip())
+        if weekly.source_status == "cached":
+            parts.append(self.messages.calendar_cached_note)
         return "\n".join(parts)
 
     def format_daily_embed(self, outlook: DailyOutlook) -> WebhookPayload:
@@ -121,7 +125,7 @@ class DiscordFormatter:
             )
 
         if outlook.source_status != "live":
-            embed["footer"] = {"text": self.messages.calendar_unavailable_note}
+            embed["footer"] = {"text": self._source_status_note(outlook.source_status)}
 
         return WebhookPayload(content="", embeds=[embed])
 
@@ -160,6 +164,11 @@ class DiscordFormatter:
                 f"{self._join_items(outlook.strongest_news_tomorrow)}."
             )
         return lines
+
+    def _source_status_note(self, source_status: str) -> str:
+        if source_status == "cached":
+            return self.messages.calendar_cached_note
+        return self.messages.calendar_unavailable_note
 
     def _session_lines(self, decision: DailyDecision) -> list[str]:
         lines: list[str] = []

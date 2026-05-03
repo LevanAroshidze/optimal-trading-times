@@ -24,7 +24,6 @@ schedules:
 calendar:
   urls:
     - https://nfs.faireconomy.media/ff_calendar_thisweek.json
-    - https://nfs.faireconomy.media/ff_calendar_nextweek.json
   timeout_seconds: 10
   market_timezone: America/New_York
   user_agent: optimal-trade-sessions-bot/0.1 (+https://github.com/optimal-trade-sessions-bot)
@@ -64,3 +63,4 @@ policy:
   post_on_weekend: false
   max_consecutive_source_failures: 3
   duplicate_post_warning: true
+  calendar_cache_max_age_hours: 72

@@ -26,11 +26,15 @@ class CalendarFeatureBuilder:
         aliases: EventAliasConfig,
         market_timezone: str,
         windows: WindowsConfig,
+        quiet_day_note: str | None = None,
     ) -> None:
         self.aliases = aliases
         self.market_tz = ZoneInfo(market_timezone)
         self.strongest_categories = set(aliases.strongest_categories)
         self.windows = windows
+        self.quiet_day_note = quiet_day_note or (
+            "No major USD news. NY AM may be slower and lower-volatility than usual."
+        )
 
     @property
     def session_windows(self) -> dict[str, tuple[time, time]]:
@@ -74,9 +78,7 @@ class CalendarFeatureBuilder:
             and not has_bank_holiday_today
             and not has_partial_holiday_today
         ):
-            quiet_note = (
-                "No major USD news. NY AM may be slower and lower-volatility than usual."
-            )
+            quiet_note = self.quiet_day_note
 
         categories_today = sorted(
             {category for match in today_events for category in match.categories}
@@ -158,7 +160,10 @@ class CalendarFeatureBuilder:
         haystack = event.title.casefold()
         categories: set[str] = set()
         for category, patterns in self.aliases.title_aliases.items():
-            if any(pattern in haystack for pattern in patterns):
+            excludes = self.aliases.title_excludes.get(category, ())
+            if any(pattern in haystack for pattern in patterns) and not any(
+                pattern in haystack for pattern in excludes
+            ):
                 categories.add(category)
         return categories
 
@@ -168,9 +173,15 @@ class CalendarFeatureBuilder:
     def _is_usd_event(self, match: EventCategoryMatch) -> bool:
         return match.event.country.upper() == "USD"
 
+    def _is_high_impact_event(self, match: EventCategoryMatch) -> bool:
+        return match.event.impact.casefold() == "high"
+
+    def _is_strong_usd_event(self, match: EventCategoryMatch) -> bool:
+        return self._is_usd_event(match) and self._is_high_impact_event(match)
+
     def _week_type(self, week_events: list[EventCategoryMatch]) -> str | None:
         if any(
-            "NFP" in match.categories and self._is_usd_event(match)
+            "NFP" in match.categories and self._is_strong_usd_event(match)
             for match in week_events
         ):
             return "NFP"
@@ -184,7 +195,7 @@ class CalendarFeatureBuilder:
                 match.event.starts_at.date()
                 for match in events
                 if category in match.categories
-                and self._is_usd_event(match)
+                and self._is_strong_usd_event(match)
                 and match.event.starts_at.date() >= target_date
             }
         )
@@ -197,7 +208,7 @@ class CalendarFeatureBuilder:
     ) -> bool:
         return any(
             category in match.categories
-            and self._is_usd_event(match)
+            and self._is_strong_usd_event(match)
             and match.event.starts_at.date() == target_date
             for match in events
         )
@@ -244,7 +255,7 @@ class CalendarFeatureBuilder:
                 or "PM_RED" in match.categories
                 or "POWELL_PM" in match.categories
             )
-            and self._is_usd_event(match)
+            and self._is_strong_usd_event(match)
             and match.event.starts_at.hour >= threshold
             for match in today_events
         )
@@ -258,7 +269,7 @@ class CalendarFeatureBuilder:
     ) -> bool:
         return any(
             category in match.categories
-            and self._is_usd_event(match)
+            and self._is_strong_usd_event(match)
             and match.event.starts_at.hour == hour
             and match.event.starts_at.minute == minute
             for match in today_events
@@ -277,7 +288,7 @@ class CalendarFeatureBuilder:
                 match.event.starts_at.date()
                 for match in events
                 if category in match.categories
-                and self._is_usd_event(match)
+                and self._is_strong_usd_event(match)
                 and match.event.starts_at.hour == hour
                 and match.event.starts_at.minute == minute
                 and match.event.starts_at.date() >= target_date
@@ -294,7 +305,7 @@ class CalendarFeatureBuilder:
         seen: set[str] = set()
 
         for match in self._sorted_matches(events):
-            if not self._is_usd_event(match):
+            if not self._is_strong_usd_event(match):
                 continue
             if not (match.categories & categories):
                 continue

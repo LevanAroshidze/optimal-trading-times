@@ -62,6 +62,10 @@ def make_aliases(**overrides) -> EventAliasConfig:
         category: tuple(values)
         for category, values in overrides.pop("title_aliases", {}).items()
     }
+    title_excludes = {
+        category: tuple(values)
+        for category, values in overrides.pop("title_excludes", {}).items()
+    }
     strongest_categories = overrides.pop(
         "strongest_categories", ("NFP", "CPI", "PPI", "FOMC", "POWELL")
     )
@@ -70,6 +74,7 @@ def make_aliases(**overrides) -> EventAliasConfig:
     )
     return EventAliasConfig(
         title_aliases=title_aliases,
+        title_excludes=title_excludes,
         strongest_categories=tuple(strongest_categories),
         partial_holiday_terms=tuple(partial_holiday_terms),
     )
