@@ -4,7 +4,7 @@ calendar_unavailable_note: Calendar source unavailable. Posting the fail-safe pl
 calendar_cached_note: Calendar source unavailable. Using cached calendar data.
 update_header: "Update: the calendar changed after the morning post."
 week_ahead_header: Week Ahead
-quiet_day_note: No major USD news. NY AM may be slower and lower-volatility than usual.
+quiet_day_note: No major USD news. On NY AM and NY PM, only consider macro-time entries 10 minutes before through 10 minutes after the hour, for example 09:50-10:10.
 day_color_labels:
   GREEN: Green
   WHITE: White

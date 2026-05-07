@@ -43,6 +43,7 @@ Each box is a small module under `bot/`. The `Notifier` orchestrates the schedul
 - Suppresses duplicate posts across reruns by storing runtime state in `data/state.json`
 - Posts trader-style Discord messages through a webhook (with embeds where helpful)
 - Falls back to a "red, calendar unavailable" plan if every URL fails
+- Backs off when Forex Factory asks for a long retry window; the FF export updates hourly, so repeated no-data weekly checks are cooled down instead of retried every 15 minutes
 
 ## What it does not do
 
@@ -70,9 +71,9 @@ Each box is a small module under `bot/`. The `Notifier` orchestrates the schedul
    - `config/messages.yaml` (optional copy/styling)
 5. Sanity check by running a dry-run for tomorrow:
 
-   ```bash
-   python -m bot --dry-run --target-date 2026-04-17
-   ```
+	   ```bash
+	   python -m bot --dry-run --target-date 2026-04-17 --force-kind daily
+	   ```
 
 6. Run for real once locally:
 
@@ -115,6 +116,7 @@ The application internally gates these schedules:
 A `policy.max_post_age_minutes` value (defaults to 240) prevents the bot from retroactively posting a stale "good morning" note hours later if state was lost.
 When `policy.post_on_weekend: false`, automatic Saturday/Sunday morning summaries and NY rechecks are suppressed. The Sunday `21:00 Asia/Tbilisi` weekly outlook still runs as the future-week overview.
 The bot stores last-known-good calendar events in `data/state.json` and can use fresh cached data for up to `policy.calendar_cache_max_age_hours` when the live calendar is unavailable. Cached posts are clearly marked.
+If the default weekly JSON feed does not contain the coming week by the Sunday `21:00 Asia/Tbilisi` outlook slot, the bot fetches the Forex Factory target-week calendar page and uses that export instead.
 If `DISCORD_OPS_WEBHOOK_URL` is set, limited ops-only alerts are sent for repeated source failures, weekly no-data skips, and state-lock recovery/failure.
 
 ## Tests, lint, types

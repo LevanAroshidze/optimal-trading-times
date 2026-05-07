@@ -20,10 +20,11 @@ from bot.type_defs import (
     StructuredValue,
 )
 
-STATE_SCHEMA_VERSION = 2
+STATE_SCHEMA_VERSION = 3
 _LOCK_ACQUIRE_ATTEMPTS = 50
 _LOCK_RETRY_SLEEP_SECONDS = 0.05
 _LOCK_STALE_AFTER_SECONDS = 600
+_LOCK_TOKEN_BYTES = 16
 
 
 @dataclass
@@ -48,6 +49,8 @@ class OperationsState:
     consecutive_source_failures: int = 0
     last_source_status: str | None = None
     alerted_keys: list[str] = field(default_factory=list)
+    source_retry_after: str | None = None
+    weekly_retry_after: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -118,6 +121,8 @@ class StateStore:
                 ),
                 last_source_status=operations.get("last_source_status"),
                 alerted_keys=list(operations.get("alerted_keys", [])),
+                source_retry_after=operations.get("source_retry_after"),
+                weekly_retry_after=dict(operations.get("weekly_retry_after", {})),
             ),
             calendar_cache=CalendarCacheState(
                 fetched_at=calendar_cache.get("fetched_at"),
@@ -144,6 +149,8 @@ class StateStore:
                 "consecutive_source_failures": state.operations.consecutive_source_failures,
                 "last_source_status": state.operations.last_source_status,
                 "alerted_keys": state.operations.alerted_keys,
+                "source_retry_after": state.operations.source_retry_after,
+                "weekly_retry_after": state.operations.weekly_retry_after,
             },
             "calendar_cache": {
                 "fetched_at": state.calendar_cache.fetched_at,
@@ -240,6 +247,14 @@ class StateStore:
                 payload["alerted_keys"] = self._string_list(
                     item, f"{name}.alerted_keys"
                 )
+            elif key == "source_retry_after" and name == "state.operations":
+                payload["source_retry_after"] = self._optional_string(
+                    item, f"{name}.source_retry_after"
+                )
+            elif key == "weekly_retry_after" and name == "state.operations":
+                payload["weekly_retry_after"] = self._string_dict(
+                    item, f"{name}.weekly_retry_after"
+                )
             elif key == "fetched_at" and name == "state.calendar_cache":
                 payload["fetched_at"] = self._optional_string(
                     item, f"{name}.fetched_at"
@@ -271,6 +286,16 @@ class StateStore:
             if not isinstance(item, str):
                 raise RuntimeError(f"{name} must be a list of strings")
             strings.append(item)
+        return strings
+
+    def _string_dict(self, value: StructuredValue, name: str) -> dict[str, str]:
+        if not isinstance(value, Mapping):
+            raise RuntimeError(f"{name} must be a mapping of strings")
+        strings: dict[str, str] = {}
+        for key, item in value.items():
+            if not isinstance(item, str):
+                raise RuntimeError(f"{name} must be a mapping of strings")
+            strings[str(key)] = item
         return strings
 
     def _event_list(
@@ -333,6 +358,7 @@ class _FileLock:
         self.path = path
         self._fd: int | None = None
         self._on_stale_recovered = on_stale_recovered
+        self._token = secrets.token_hex(_LOCK_TOKEN_BYTES)
 
     def __enter__(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -343,6 +369,7 @@ class _FileLock:
                     os.O_CREAT | os.O_EXCL | os.O_WRONLY,
                     0o600,
                 )
+                os.write(self._fd, self._token.encode("ascii"))
                 return
             except FileExistsError:
                 self._steal_stale_lock()
@@ -352,8 +379,9 @@ class _FileLock:
         if self._fd is not None:
             os.close(self._fd)
             self._fd = None
-        with contextlib.suppress(FileNotFoundError):
-            self.path.unlink()
+        with contextlib.suppress(FileNotFoundError, OSError):
+            if self.path.read_text(encoding="ascii") == self._token:
+                self.path.unlink()
 
     def _steal_stale_lock(self) -> None:
         try:

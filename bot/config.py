@@ -123,7 +123,8 @@ class MessagesConfig:
     update_header: str = "Update: the calendar changed after the morning post."
     week_ahead_header: str = "Week Ahead"
     quiet_day_note: str = (
-        "No major USD news. NY AM may be slower and lower-volatility than usual."
+        "No major USD news. On NY AM and NY PM, only consider macro-time entries "
+        "10 minutes before through 10 minutes after the hour, for example 09:50-10:10."
     )
     day_color_labels: dict[str, str] = field(
         default_factory=lambda: {"GREEN": "Green", "WHITE": "White", "RED": "Red"}

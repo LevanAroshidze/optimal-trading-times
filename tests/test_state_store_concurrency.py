@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
+import time
 
 from bot.state_store import (
+    _LOCK_STALE_AFTER_SECONDS,
     STATE_SCHEMA_VERSION,
     BotState,
     DailyPostState,
@@ -45,6 +48,26 @@ def test_lock_creates_and_releases_sentinel(tmp_path):
     store = StateStore(state_path, lock_path=lock_path)
     with store.lock():
         assert lock_path.exists()
+    assert not lock_path.exists()
+
+
+def test_stale_lock_exit_does_not_delete_new_lock_owner(tmp_path):
+    state_path = tmp_path / "state.json"
+    lock_path = tmp_path / "state.lock"
+    first = StateStore(state_path, lock_path=lock_path).lock()
+    second = StateStore(state_path, lock_path=lock_path).lock()
+
+    first.__enter__()
+    stale_time = time.time() - _LOCK_STALE_AFTER_SECONDS - 1
+    os.utime(lock_path, (stale_time, stale_time))
+    second.__enter__()
+
+    try:
+        first.__exit__(None, None, None)
+        assert lock_path.exists()
+    finally:
+        second.__exit__(None, None, None)
+
     assert not lock_path.exists()
 
 

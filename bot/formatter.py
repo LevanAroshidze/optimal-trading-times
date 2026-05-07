@@ -82,6 +82,8 @@ class DiscordFormatter:
                     f" Other red-folder news: "
                     f"{self._join_items(outlook.other_red_news_today)}."
                 )
+            if outlook.quiet_note:
+                line += f" {outlook.quiet_note}"
             parts.append(line.strip())
         if weekly.source_status == "cached":
             parts.append(self.messages.calendar_cached_note)
@@ -147,11 +149,13 @@ class DiscordFormatter:
     def _news_lines(self, outlook: DailyOutlook) -> list[str]:
         lines: list[str] = []
         if outlook.strongest_news_today:
-            lines.append(
+            line = (
                 "Strongest USD news: "
-                f"{self._join_items(outlook.strongest_news_today)}. "
-                f"{self.messages.strong_news_advice}"
+                f"{self._join_items(outlook.strongest_news_today)}."
             )
+            if outlook.decision.rule_id != "nfp_week_friday":
+                line += f" {self.messages.strong_news_advice}"
+            lines.append(line)
         if outlook.other_red_news_today:
             lines.append(
                 "Other red-folder USD news: "

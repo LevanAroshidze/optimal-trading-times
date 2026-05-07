@@ -4,7 +4,9 @@ import asyncio
 import logging
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
+from html.parser import HTMLParser
+from urllib.parse import urljoin
 
 import httpx
 
@@ -21,12 +23,17 @@ _MAX_RETRY_AFTER_SECONDS = 30.0
 class CalendarSourceError(RuntimeError):
     """Raised when Forex Factory calendar data cannot be loaded."""
 
+    def __init__(self, message: str, retry_after_seconds: float | None = None) -> None:
+        super().__init__(message)
+        self.retry_after_seconds = retry_after_seconds
+
 
 @dataclass(frozen=True)
 class FetchResult:
     url: str
     payload: list[Mapping[str, StructuredValue]] | None
     error: str | None = None
+    retry_after_seconds: float | None = None
 
     @property
     def succeeded(self) -> bool:
@@ -76,6 +83,28 @@ class ForexFactoryCalendarSource:
         if skipped_items:
             logger.info("calendar_skipped_items count=%s", skipped_items)
 
+        return sorted(events.values(), key=lambda event: event.starts_at)
+
+    async def fetch_events_for_week(self, week_start: date) -> list[CalendarEvent]:
+        week_token = self._week_token(week_start)
+        page_url = f"https://www.forexfactory.com/calendar?week={week_token}"
+        timeout = httpx.Timeout(self.timeout_seconds)
+        page_headers = {"User-Agent": self.user_agent, "Accept": "text/html"}
+        json_headers = {"User-Agent": self.user_agent, "Accept": "application/json"}
+        async with httpx.AsyncClient(timeout=timeout, headers=page_headers) as client:
+            export_url = await self._fetch_week_export_url(client, page_url)
+        async with httpx.AsyncClient(timeout=timeout, headers=json_headers) as client:
+            result = await self._fetch_with_retries(client, export_url)
+        self._last_results = [result]
+
+        if not result.succeeded:
+            raise self._all_failed_error([result])
+
+        events, skipped_items = self._events_from_results([result])
+        if not events:
+            raise CalendarSourceError("Calendar response was empty.")
+        if skipped_items:
+            logger.info("calendar_skipped_items count=%s", skipped_items)
         return sorted(events.values(), key=lambda event: event.starts_at)
 
     async def _fetch_results(self, client: httpx.AsyncClient) -> list[FetchResult]:
@@ -168,8 +197,14 @@ class ForexFactoryCalendarSource:
 
     def _all_failed_error(self, failed: list[FetchResult]) -> CalendarSourceError:
         joined = "; ".join(f"{result.url}: {result.error}" for result in failed)
+        retry_after_values = [
+            result.retry_after_seconds
+            for result in failed
+            if result.retry_after_seconds is not None
+        ]
         return CalendarSourceError(
-            f"All calendar URLs failed. {joined}" if joined else "All calendar URLs failed."
+            f"All calendar URLs failed. {joined}" if joined else "All calendar URLs failed.",
+            retry_after_seconds=max(retry_after_values) if retry_after_values else None,
         )
 
     async def _fetch_all(
@@ -209,7 +244,12 @@ class ForexFactoryCalendarSource:
                     if retry_after is not None:
                         last_error = f"HTTP 429 retry_after={retry_after:g}s"
                     if retry_after is not None and retry_after > _MAX_RETRY_AFTER_SECONDS:
-                        return FetchResult(url=url, payload=None, error=last_error)
+                        return FetchResult(
+                            url=url,
+                            payload=None,
+                            error=last_error,
+                            retry_after_seconds=retry_after,
+                        )
                     if attempt < self.max_retries:
                         await self._sleep_before_retry(attempt, retry_after)
                     continue
@@ -218,11 +258,26 @@ class ForexFactoryCalendarSource:
             except httpx.HTTPError as error:
                 last_error = error.__class__.__name__
             else:
+                if self._looks_rate_limited(response):
+                    return FetchResult(
+                        url=url,
+                        payload=None,
+                        error="rate_limited retry_after=300s",
+                        retry_after_seconds=300.0,
+                    )
                 try:
                     payload = response.json()
                 except ValueError:
                     return FetchResult(
                         url=url, payload=None, error="invalid_json"
+                    )
+                retry_after = self._retry_after_from_payload(payload)
+                if retry_after is not None:
+                    return FetchResult(
+                        url=url,
+                        payload=None,
+                        error=f"rate_limited retry_after={retry_after:g}s",
+                        retry_after_seconds=retry_after,
                     )
                 try:
                     coerced = self._coerce_payload(payload, url)
@@ -260,6 +315,18 @@ class ForexFactoryCalendarSource:
             return max(0.0, float(retry_after))
         return None
 
+    def _retry_after_from_payload(self, payload: StructuredValue) -> float | None:
+        retry_after = payload.get("retry_after") if isinstance(payload, dict) else None
+        if isinstance(retry_after, (int, float)):
+            return max(0.0, float(retry_after))
+        return None
+
+    def _looks_rate_limited(self, response: httpx.Response) -> bool:
+        content_type = response.headers.get("content-type", "")
+        if "json" in content_type.casefold():
+            return False
+        return "exceeded the limit for Calendar Export requests" in response.text
+
     def _coerce_payload(
         self, payload: StructuredValue, url: str
     ) -> list[Mapping[str, StructuredValue]]:
@@ -274,3 +341,54 @@ class ForexFactoryCalendarSource:
                 )
             items.append({str(key): value for key, value in item.items()})
         return items
+
+    async def _fetch_week_export_url(
+        self, client: httpx.AsyncClient, page_url: str
+    ) -> str:
+        try:
+            response = await client.get(page_url)
+            response.raise_for_status()
+        except httpx.HTTPStatusError as error:
+            retry_after = None
+            if error.response.status_code == _HTTP_TOO_MANY_REQUESTS:
+                retry_after = self._parse_retry_after(error.response)
+            raise CalendarSourceError(
+                f"Weekly calendar page failed with HTTP {error.response.status_code}: {page_url}",
+                retry_after_seconds=retry_after,
+            ) from error
+        except httpx.HTTPError as error:
+            raise CalendarSourceError(
+                f"Weekly calendar page failed with {error.__class__.__name__}: {page_url}"
+            ) from error
+
+        parser = _WeeklyExportParser(page_url)
+        parser.feed(response.text)
+        export_url = parser.json_export_url
+        if export_url is None:
+            if "exceeded the limit for Calendar Export requests" in response.text:
+                raise CalendarSourceError(
+                    "Weekly calendar export was rate limited.",
+                    retry_after_seconds=300.0,
+                )
+            raise CalendarSourceError(
+                f"Weekly calendar page did not include a JSON export link: {page_url}"
+            )
+        return export_url
+
+    def _week_token(self, week_start: date) -> str:
+        return f"{week_start.strftime('%b').casefold()}{week_start.day}.{week_start.year}"
+
+
+class _WeeklyExportParser(HTMLParser):
+    def __init__(self, base_url: str) -> None:
+        super().__init__()
+        self.base_url = base_url
+        self.json_export_url: str | None = None
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag != "a" or self.json_export_url is not None:
+            return
+        values = dict(attrs)
+        href = values.get("href")
+        if href and "ff_calendar_thisweek.json" in href:
+            self.json_export_url = urljoin(self.base_url, href)

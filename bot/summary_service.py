@@ -35,6 +35,9 @@ class DailySummaryService:
     async def load_events(self) -> list[CalendarEvent]:
         return await self.source.fetch_events()
 
+    async def load_events_for_week(self, week_start: date) -> list[CalendarEvent]:
+        return await self.source.fetch_events_for_week(week_start)
+
     def build_outlook_for_date(
         self,
         target_date: date,

@@ -50,6 +50,8 @@ PostKind: TypeAlias = Literal["daily", "weekly", "recheck"]
 class CalendarEventSource(Protocol):
     async def fetch_events(self) -> list[CalendarEvent]: ...
 
+    async def fetch_events_for_week(self, week_start: date) -> list[CalendarEvent]: ...
+
 
 class WebhookSenderProtocol(Protocol):
     async def send_message(self, content: str) -> None: ...
@@ -57,6 +59,8 @@ class WebhookSenderProtocol(Protocol):
 
 class SummaryServiceProtocol(Protocol):
     async def load_events(self) -> list[CalendarEvent]: ...
+
+    async def load_events_for_week(self, week_start: date) -> list[CalendarEvent]: ...
 
     def build_outlook_for_date(
         self,
@@ -84,6 +88,8 @@ class StateSection(TypedDict, total=False):
     consecutive_source_failures: int
     last_source_status: str | None
     alerted_keys: list[str]
+    source_retry_after: str | None
+    weekly_retry_after: dict[str, str]
     fetched_at: str | None
     events: list[StructuredMapping]
 
@@ -106,6 +112,7 @@ KNOWN_FEATURE_KEYS: frozenset[str] = frozenset(
         "has_cpi_today",
         "has_ppi_today",
         "has_bank_holiday_today",
+        "had_bank_holiday_yesterday",
         "has_partial_holiday_today",
         "has_830_red_news",
         "has_powell_10am_today",

@@ -33,13 +33,26 @@ class FakeSender:
 
 
 class FakeSummaryService:
-    def __init__(self, outlooks: list[DailyOutlook], weekly: WeeklyOutlook | None = None):
+    def __init__(
+        self,
+        outlooks: list[DailyOutlook],
+        weekly: WeeklyOutlook | None = None,
+        week_events: list[CalendarEvent] | None = None,
+    ):
         self.outlooks = outlooks
         self.weekly = weekly
+        self.week_events = week_events or []
         self.index = 0
+        self.load_count = 0
+        self.week_load_count = 0
 
     async def load_events(self) -> list[CalendarEvent]:
+        self.load_count += 1
         return []
+
+    async def load_events_for_week(self, week_start: date) -> list[CalendarEvent]:
+        self.week_load_count += 1
+        return list(self.week_events)
 
     def build_outlook_for_date(
         self,
@@ -227,8 +240,9 @@ def test_notifier_persists_source_failures_when_no_message_is_sent(tmp_path):
 
     assert sender.messages == []
     state = state_store.load()
-    assert state.operations.consecutive_source_failures == 2
+    assert state.operations.consecutive_source_failures == 1
     assert state.operations.last_source_status == "unavailable"
+    assert "2026-04-20" in state.operations.weekly_retry_after
 
 
 def test_notifier_caches_live_events_after_success(tmp_path):
@@ -392,6 +406,127 @@ def test_notifier_weekly_uses_previous_cache_when_live_target_week_missing(tmp_p
 
     assert sender.messages[0].startswith("Week Ahead")
     assert "Using cached calendar data" in sender.messages[0]
+
+
+def test_notifier_weekly_fetches_target_week_when_live_week_missing(tmp_path):
+    target_event = CalendarEvent(
+        title="CPI m/m",
+        country="USD",
+        impact="High",
+        starts_at=datetime.fromisoformat("2026-04-20T08:30:00-04:00"),
+    )
+
+    class WeeklyFallbackSummaryService(FakeSummaryService):
+        def build_weekly_outlook(
+            self,
+            week_start: date,
+            events: list[CalendarEvent],
+            source_status: SourceStatus = "live",
+        ) -> WeeklyOutlook | None:
+            if source_status == "live":
+                return None
+            return super().build_weekly_outlook(week_start, events, source_status)
+
+    now = datetime(2026, 4, 19, 17, 0, tzinfo=UTC)
+    weekly_day = make_outlook(
+        "cpi_day",
+        "CPI day.",
+        ["strong_today:CPI at 8:30 AM NY time"],
+        target_date=date(2026, 4, 20),
+    )
+    state_store = StateStore(tmp_path / "state.json")
+    state_store.save(BotState(daily=DailyPostState(posted_for_date="2026-04-19")))
+    summary = WeeklyFallbackSummaryService(
+        [weekly_day],
+        weekly=WeeklyOutlook(week_start=date(2026, 4, 20), days=[weekly_day]),
+        week_events=[target_event],
+    )
+    sender = FakeSender()
+    notifier = TradingCalendarNotifier(
+        app_config=make_app_config(
+            str(tmp_path / "state.json"), post_on_weekend=False
+        ),
+        summary_service=summary,
+        formatter=DiscordFormatter(),
+        sender=sender,
+        state_store=state_store,
+    )
+
+    asyncio.run(notifier.run_once(now))
+
+    assert summary.week_load_count == 1
+    assert sender.messages[0].startswith("Week Ahead")
+    assert "Using cached calendar data" in sender.messages[0]
+    assert state_store.load().calendar_cache.events == [target_event]
+
+
+def test_notifier_weekly_no_data_alert_is_persisted_and_cooldown_skips_refetch(
+    tmp_path,
+):
+    class EmptyWeeklySummaryService(FakeSummaryService):
+        def build_weekly_outlook(
+            self,
+            week_start: date,
+            events: list[CalendarEvent],
+            source_status: SourceStatus = "live",
+        ) -> WeeklyOutlook | None:
+            return None
+
+    state_store = StateStore(tmp_path / "state.json")
+    state_store.save(BotState(daily=DailyPostState(posted_for_date="2026-04-19")))
+    ops_sender = FakeSender()
+    summary = EmptyWeeklySummaryService([])
+    notifier = TradingCalendarNotifier(
+        app_config=make_app_config(
+            str(tmp_path / "state.json"), post_on_weekend=False
+        ),
+        summary_service=summary,
+        formatter=DiscordFormatter(),
+        sender=FakeSender(),
+        ops_sender=ops_sender,
+        state_store=state_store,
+    )
+    first_run = datetime(2026, 4, 19, 17, 0, tzinfo=UTC)
+
+    asyncio.run(notifier.run_once(first_run))
+    asyncio.run(notifier.run_once(first_run + timedelta(minutes=15)))
+
+    assert len(ops_sender.messages) == 1
+    assert summary.load_count == 1
+    assert summary.week_load_count == 1
+    state = state_store.load()
+    assert "weekly_no_events:2026-04-20" in state.operations.alerted_keys
+    assert "2026-04-20" in state.operations.weekly_retry_after
+
+
+def test_notifier_persists_and_respects_source_retry_after(tmp_path):
+    class RateLimitedSummaryService(FakeSummaryService):
+        async def load_events(self) -> list[CalendarEvent]:
+            self.load_count += 1
+            raise CalendarSourceError("rate limited", retry_after_seconds=300)
+
+    summary = RateLimitedSummaryService(
+        [make_outlook("calendar_unavailable", "Calendar unavailable.", [])]
+    )
+    state_store = StateStore(tmp_path / "state.json")
+    notifier = TradingCalendarNotifier(
+        app_config=make_app_config(str(tmp_path / "state.json")),
+        summary_service=summary,
+        formatter=DiscordFormatter(),
+        sender=FakeSender(),
+        state_store=state_store,
+    )
+    now = datetime(2026, 4, 16, 5, 0, tzinfo=UTC)
+
+    asyncio.run(notifier.run_once(now))
+    state = state_store.load()
+    second_status, _, _ = asyncio.run(
+        notifier._load_events(state, now + timedelta(minutes=1))
+    )
+
+    assert second_status == "unavailable"
+    assert summary.load_count == 1
+    assert state.operations.source_retry_after is not None
 
 
 def test_notifier_sends_ops_alert_once_at_source_failure_threshold(tmp_path):

@@ -15,4 +15,4 @@ RUN pip install --upgrade pip \
  && pip install . \
  && mkdir -p /app/data
 
-ENTRYPOINT ["python", "-m", "bot"]
+CMD ["python", "-m", "bot"]

@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 
 
 _WEEKEND_DAYS = {"SAT", "SUN"}
+_WEEKLY_NO_DATA_RETRY_AFTER = timedelta(hours=1)
 
 
 class TradingCalendarNotifier:
@@ -106,6 +107,18 @@ class TradingCalendarNotifier:
                     days=(target_date_override or daily_target).weekday()
                 )
             weekly_due = self._is_weekly_due(state, weekly_target)
+            if (
+                weekly_due
+                and self.force_kind != "weekly"
+                and weekly_target is not None
+                and self._weekly_retry_after_active(state, weekly_target, now)
+            ):
+                logger.info(
+                    "weekly_skipped reason=retry_after week_start=%s retry_after=%s",
+                    weekly_target,
+                    state.operations.weekly_retry_after.get(self._date_key(weekly_target)),
+                )
+                weekly_due = False
 
             recheck_target = target_date_override or self._schedule_date(
                 now, self.app_config.ny_recheck
@@ -156,6 +169,17 @@ class TradingCalendarNotifier:
                 weekly_outlook = self.summary_service.build_weekly_outlook(
                     weekly_target, events, source_status
                 )
+                if (
+                    weekly_outlook is None
+                    and source_status != "unavailable"
+                    and not self._source_retry_after_active(state, now)
+                ):
+                    weekly_outlook = await self._load_target_week_outlook(
+                        state,
+                        now,
+                        weekly_target,
+                    )
+                    operations_changed = True
                 if weekly_outlook is None and source_status == "live":
                     cached_events = self._fresh_cached_events(previous_cache, now)
                     if cached_events:
@@ -175,6 +199,7 @@ class TradingCalendarNotifier:
                     )
                     state_was_saved = not self.dry_run
                 else:
+                    self._record_weekly_retry_after(state, weekly_target, now)
                     alert_sent = await self._send_ops_alert_once(
                         state,
                         f"weekly_no_events:{self._date_key(weekly_target)}",
@@ -186,6 +211,9 @@ class TradingCalendarNotifier:
                         "weekly_skipped reason=no_events week_start=%s",
                         weekly_target,
                     )
+                    if not self.dry_run:
+                        self.state_store.save(state)
+                        state_was_saved = True
 
             if recheck_due:
                 if todays_outlook is None or todays_outlook.target_date != recheck_target:
@@ -241,13 +269,41 @@ class TradingCalendarNotifier:
         self, state: BotState, now: datetime
     ) -> tuple[SourceStatus, list, bool]:
         previous = state.operations
+        retry_after = self._parse_state_datetime(previous.source_retry_after)
+        if retry_after is not None and now.astimezone(UTC) < retry_after:
+            logger.info(
+                "calendar_fetch_skipped reason=source_retry_after retry_after=%s",
+                previous.source_retry_after,
+            )
+            cached_events = self._fresh_cached_events(state.calendar_cache, now)
+            if cached_events:
+                state.operations = OperationsState(
+                    consecutive_source_failures=previous.consecutive_source_failures,
+                    last_source_status="cached",
+                    alerted_keys=list(previous.alerted_keys),
+                    source_retry_after=previous.source_retry_after,
+                    weekly_retry_after=dict(previous.weekly_retry_after),
+                )
+                return "cached", cached_events, state.operations != previous
+            state.operations = OperationsState(
+                consecutive_source_failures=previous.consecutive_source_failures,
+                last_source_status="unavailable",
+                alerted_keys=list(previous.alerted_keys),
+                source_retry_after=previous.source_retry_after,
+                weekly_retry_after=dict(previous.weekly_retry_after),
+            )
+            return "unavailable", [], state.operations != previous
+
         try:
             events = await self.summary_service.load_events()
         except CalendarSourceError as error:
+            source_retry_after = self._source_retry_after(now, error)
             state.operations = OperationsState(
                 consecutive_source_failures=previous.consecutive_source_failures + 1,
                 last_source_status="unavailable",
                 alerted_keys=list(previous.alerted_keys),
+                source_retry_after=source_retry_after,
+                weekly_retry_after=dict(previous.weekly_retry_after),
             )
             logger.warning(
                 "calendar_unavailable consecutive_failures=%s error=%s",
@@ -274,6 +330,8 @@ class TradingCalendarNotifier:
                     consecutive_source_failures=state.operations.consecutive_source_failures,
                     last_source_status="cached",
                     alerted_keys=list(state.operations.alerted_keys),
+                    source_retry_after=state.operations.source_retry_after,
+                    weekly_retry_after=dict(state.operations.weekly_retry_after),
                 )
                 return "cached", cached_events, True
             return "unavailable", [], True
@@ -282,6 +340,8 @@ class TradingCalendarNotifier:
                 consecutive_source_failures=0,
                 last_source_status="live",
                 alerted_keys=list(previous.alerted_keys),
+                source_retry_after=None,
+                weekly_retry_after=dict(previous.weekly_retry_after),
             )
             state.calendar_cache = CalendarCacheState(
                 fetched_at=now.astimezone(UTC).isoformat(),
@@ -289,6 +349,42 @@ class TradingCalendarNotifier:
             )
             operations_changed = state.operations != previous
             return "live", events, True if events else operations_changed
+
+    async def _load_target_week_outlook(
+        self,
+        state: BotState,
+        now: datetime,
+        weekly_target: date,
+    ):
+        try:
+            weekly_events = await self.summary_service.load_events_for_week(weekly_target)
+        except CalendarSourceError as error:
+            source_retry_after = self._source_retry_after(now, error)
+            if source_retry_after is not None:
+                state.operations = OperationsState(
+                    consecutive_source_failures=state.operations.consecutive_source_failures,
+                    last_source_status=state.operations.last_source_status,
+                    alerted_keys=list(state.operations.alerted_keys),
+                    source_retry_after=source_retry_after,
+                    weekly_retry_after=dict(state.operations.weekly_retry_after),
+                )
+            logger.warning(
+                "weekly_target_fetch_failed week_start=%s error=%s",
+                weekly_target,
+                error,
+            )
+            return None
+
+        if not weekly_events:
+            return None
+
+        state.calendar_cache = CalendarCacheState(
+            fetched_at=now.astimezone(UTC).isoformat(),
+            events=list(weekly_events),
+        )
+        return self.summary_service.build_weekly_outlook(
+            weekly_target, weekly_events, "cached"
+        )
 
     def _fresh_cached_events(
         self, cache: CalendarCacheState, now: datetime
@@ -305,6 +401,44 @@ class TradingCalendarNotifier:
         if now.astimezone(UTC) - fetched_at.astimezone(UTC) > max_age:
             return None
         return list(cache.events)
+
+    def _source_retry_after(
+        self, now: datetime, error: CalendarSourceError
+    ) -> str | None:
+        if error.retry_after_seconds is None:
+            return None
+        retry_at = now.astimezone(UTC) + timedelta(seconds=error.retry_after_seconds)
+        return retry_at.isoformat()
+
+    def _weekly_retry_after_active(
+        self, state: BotState, weekly_target: date, now: datetime
+    ) -> bool:
+        retry_after = state.operations.weekly_retry_after.get(self._date_key(weekly_target))
+        parsed = self._parse_state_datetime(retry_after)
+        return parsed is not None and now.astimezone(UTC) < parsed
+
+    def _source_retry_after_active(self, state: BotState, now: datetime) -> bool:
+        retry_after = self._parse_state_datetime(state.operations.source_retry_after)
+        return retry_after is not None and now.astimezone(UTC) < retry_after
+
+    def _record_weekly_retry_after(
+        self, state: BotState, weekly_target: date, now: datetime
+    ) -> None:
+        retry_after = now.astimezone(UTC) + _WEEKLY_NO_DATA_RETRY_AFTER
+        state.operations.weekly_retry_after[self._date_key(weekly_target)] = (
+            retry_after.isoformat()
+        )
+
+    def _parse_state_datetime(self, value: str | None) -> datetime | None:
+        if not value:
+            return None
+        try:
+            parsed = datetime.fromisoformat(value)
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            return None
+        return parsed.astimezone(UTC)
 
     async def _send_ops_alert_once(
         self, state: BotState, key: str, title: str, body: str

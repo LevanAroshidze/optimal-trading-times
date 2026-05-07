@@ -33,8 +33,9 @@ These are the values your `when:` block can reference. They are computed by `Cal
 | `has_cpi_today` | bool | True when CPI lands on the target date. |
 | `has_ppi_today` | bool | Same for PPI. |
 | `has_bank_holiday_today` | bool | Full USD bank holiday today. |
+| `had_bank_holiday_yesterday` | bool | Full USD bank holiday on the previous calendar day. |
 | `has_partial_holiday_today` | bool | Early-close / half-day on the calendar today. |
-| `has_830_red_news` | bool | A high-impact USD release at the AM red-news time configured in `windows.am_red_news_at`. |
+| `has_830_red_news` | bool | A high-impact USD release at the AM red-news time configured in `windows.am_red_news_at`, excluding CPI/PPI/NFP/FOMC/Powell strongest-category events. |
 | `has_powell_10am_today` | bool | A Fed Chair Powell speech at the time configured in `windows.powell_speech_at`. |
 | `days_until_powell_10am` | int or null | Number of days until the next such speech. |
 | `has_pm_red_news` | bool | A high-impact PM USD release after `windows.pm_news_after_hour`. |
@@ -84,7 +85,7 @@ Restrictions:
 
 ## Priority guidance
 
-- Reserve high priorities (>=120) for hard "no-trade" days (weekend, full holidays, NFP Thursday).
+- Reserve high priorities (>=120) for hard "no-trade" days (weekend, full holidays, partial holidays, NFP Thursday).
 - Mid priorities (80-110) are for high-impact USD news or NFP-week patterns.
 - Low priorities (1-15) are catch-all caution rules.
 - Priority 0 must be reserved for the fallback rule.

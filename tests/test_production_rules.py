@@ -21,6 +21,7 @@ def make_features(**overrides: FeatureValue) -> FeatureMap:
         "has_cpi_today": False,
         "has_ppi_today": False,
         "has_bank_holiday_today": False,
+        "had_bank_holiday_yesterday": False,
         "has_partial_holiday_today": False,
         "has_830_red_news": False,
         "has_powell_10am_today": False,
@@ -66,10 +67,10 @@ def make_features(**overrides: FeatureValue) -> FeatureMap:
             "partial_holiday_day",
             make_features(weekday="MON", has_partial_holiday_today=True),
             {
-                "London": DayColor.WHITE,
-                "PreMarket": DayColor.WHITE,
-                "NY_AM_FIRST_HALF": DayColor.WHITE,
-                "NY_AM_SECOND_HALF": DayColor.WHITE,
+                "London": DayColor.RED,
+                "PreMarket": DayColor.RED,
+                "NY_AM_FIRST_HALF": DayColor.RED,
+                "NY_AM_SECOND_HALF": DayColor.RED,
                 "Lunch": DayColor.RED,
                 "NY_PM_FIRST_HALF": DayColor.RED,
                 "NY_PM_SECOND_HALF": DayColor.RED,
@@ -235,7 +236,7 @@ def make_features(**overrides: FeatureValue) -> FeatureMap:
             "red_830_news_today",
             make_features(weekday="THU", has_830_red_news=True),
             {
-                "London": DayColor.WHITE,
+                "London": DayColor.GREEN,
                 "PreMarket": DayColor.RED,
                 "NY_AM_FIRST_HALF": DayColor.GREEN,
                 "NY_AM_SECOND_HALF": DayColor.GREEN,
@@ -253,8 +254,25 @@ def make_features(**overrides: FeatureValue) -> FeatureMap:
                 "NY_AM_FIRST_HALF": DayColor.WHITE,
                 "NY_AM_SECOND_HALF": DayColor.WHITE,
                 "Lunch": DayColor.GREEN,
-                "NY_PM_FIRST_HALF": DayColor.GREEN,
-                "NY_PM_SECOND_HALF": DayColor.GREEN,
+                "NY_PM_FIRST_HALF": DayColor.WHITE,
+                "NY_PM_SECOND_HALF": DayColor.WHITE,
+            },
+        ),
+        (
+            "post_bank_holiday_no_major_news_day",
+            make_features(
+                weekday="TUE",
+                had_bank_holiday_yesterday=True,
+                has_no_major_usd_news_today=True,
+            ),
+            {
+                "London": DayColor.WHITE,
+                "PreMarket": DayColor.WHITE,
+                "NY_AM_FIRST_HALF": DayColor.WHITE,
+                "NY_AM_SECOND_HALF": DayColor.WHITE,
+                "Lunch": DayColor.WHITE,
+                "NY_PM_FIRST_HALF": DayColor.WHITE,
+                "NY_PM_SECOND_HALF": DayColor.WHITE,
             },
         ),
         (
@@ -280,3 +298,43 @@ def test_production_rule_matrix(
     assert decision.rule_id == rule_id
     assert decision.session_colors == expected_colors
     assert list(decision.session_colors.keys()) == SESSION_ORDER
+
+
+@pytest.mark.parametrize(
+    ("features", "expected_rule"),
+    [
+        (
+            make_features(
+                weekday="MON",
+                week_type="NFP",
+                had_bank_holiday_yesterday=True,
+                has_no_major_usd_news_today=True,
+            ),
+            "nfp_week_monday",
+        ),
+        (
+            make_features(
+                weekday="MON",
+                days_before_cpi=1,
+                had_bank_holiday_yesterday=True,
+                has_no_major_usd_news_today=True,
+            ),
+            "cpi_minus_1",
+        ),
+        (
+            make_features(
+                weekday="MON",
+                days_until_powell_10am=1,
+                had_bank_holiday_yesterday=True,
+                has_no_major_usd_news_today=True,
+            ),
+            "powell_10am_previous_day",
+        ),
+    ],
+)
+def test_post_bank_holiday_quiet_rule_stays_below_stronger_setups(
+    features: FeatureMap, expected_rule: str
+) -> None:
+    decision = ENGINE.match(date(2026, 4, 13), features)
+
+    assert decision.rule_id == expected_rule

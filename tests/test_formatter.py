@@ -124,3 +124,42 @@ def test_formatter_marks_cached_daily_and_weekly_messages():
 
     assert "Using cached calendar data" in formatter.format_daily(cached_daily)
     assert "Using cached calendar data" in formatter.format_weekly(weekly)
+
+
+def test_formatter_does_not_duplicate_nfp_wait_copy():
+    outlook = make_outlook()
+    decision = DailyDecision(
+        rule_id="nfp_week_friday",
+        target_date=date(2026, 4, 17),
+        day_color=DayColor.WHITE,
+        tradable=TradableStatus.CAUTION,
+        session_colors=outlook.decision.session_colors,
+        reason="NFP day. Wait 15-30 minutes after the 8:30 release before treating NY AM as green.",
+    )
+    nfp = DailyOutlook(
+        decision=decision,
+        summary_reason=decision.reason,
+        strongest_news_today=["NFP at 8:30 AM NY time"],
+    )
+
+    message = DiscordFormatter().format_daily(nfp)
+
+    assert message.count("Wait 15-30 minutes") == 1
+    assert "Strongest USD news: NFP at 8:30 AM NY time." in message
+
+
+def test_formatter_includes_weekly_quiet_note():
+    quiet_note = (
+        "No major USD news. On NY AM and NY PM, only consider macro-time entries "
+        "10 minutes before through 10 minutes after the hour, for example 09:50-10:10."
+    )
+    outlook = DailyOutlook(
+        decision=make_outlook().decision,
+        summary_reason="No major USD news today.",
+        quiet_note=quiet_note,
+    )
+    weekly = WeeklyOutlook(week_start=date(2026, 4, 20), days=[outlook])
+
+    message = DiscordFormatter().format_weekly(weekly)
+
+    assert "09:50-10:10" in message

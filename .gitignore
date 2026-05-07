@@ -10,5 +10,6 @@ venv/
 build/
 dist/
 *.exe
+.DS_Store
 data/state.json
 data/

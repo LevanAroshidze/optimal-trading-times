@@ -33,7 +33,9 @@ class CalendarFeatureBuilder:
         self.strongest_categories = set(aliases.strongest_categories)
         self.windows = windows
         self.quiet_day_note = quiet_day_note or (
-            "No major USD news. NY AM may be slower and lower-volatility than usual."
+            "No major USD news. On NY AM and NY PM, only consider macro-time "
+            "entries 10 minutes before through 10 minutes after the hour, "
+            "for example 09:50-10:10."
         )
 
     @property
@@ -53,6 +55,9 @@ class CalendarFeatureBuilder:
     ) -> CalendarDayAnalysis:
         localised = self._localise_events(events)
         today_events = self._events_on_date(localised, target_date)
+        yesterday_events = self._events_on_date(
+            localised, target_date - timedelta(days=1)
+        )
         tomorrow_events = self._events_on_date(localised, target_date + timedelta(days=1))
         week_start = self._week_start(target_date)
         week_events = [
@@ -70,6 +75,7 @@ class CalendarFeatureBuilder:
         other_red_news_today = self._other_red_event_summaries(today_events)
 
         has_bank_holiday_today = self._has_full_holiday_today(today_events)
+        had_bank_holiday_yesterday = self._has_full_holiday_today(yesterday_events)
         has_partial_holiday_today = self._has_partial_holiday_today(today_events)
         has_major_usd_news_today = bool(strongest_news_today or other_red_news_today)
         quiet_note = None
@@ -95,6 +101,7 @@ class CalendarFeatureBuilder:
             "has_cpi_today": self._has_category_on_date(target_date, week_events, "CPI"),
             "has_ppi_today": self._has_category_on_date(target_date, week_events, "PPI"),
             "has_bank_holiday_today": has_bank_holiday_today,
+            "had_bank_holiday_yesterday": had_bank_holiday_yesterday,
             "has_partial_holiday_today": has_partial_holiday_today,
             "has_830_red_news": self._has_am_red_news(today_events, am_time),
             "has_powell_10am_today": self._has_time_sensitive_category(
@@ -217,9 +224,7 @@ class CalendarFeatureBuilder:
         self, today_events: list[EventCategoryMatch], at_time: time
     ) -> bool:
         return any(
-            "RED_830AM" in match.categories
-            and self._is_usd_event(match)
-            and match.event.impact.casefold() == "high"
+            self._is_other_red_event(match)
             and match.event.starts_at.hour == at_time.hour
             and match.event.starts_at.minute == at_time.minute
             for match in today_events
@@ -406,6 +411,9 @@ class CalendarFeatureBuilder:
         overlay: SessionColors = {}
 
         for session_name, window in self.windows.session_windows.items():
+            if self._is_am_red_news_time(starts_at) and session_name == "London":
+                continue
+
             session_start = datetime.combine(
                 starts_at.date(), window.start, tzinfo=starts_at.tzinfo
             )
@@ -428,6 +436,10 @@ class CalendarFeatureBuilder:
             overlay[session_name] = DayColor.WHITE
 
         return overlay
+
+    def _is_am_red_news_time(self, starts_at: datetime) -> bool:
+        am_time = self.windows.am_red_news_at
+        return starts_at.hour == am_time.hour and starts_at.minute == am_time.minute
 
     def _merge_pressure_overlay(
         self, base: SessionColors, incoming: SessionColors

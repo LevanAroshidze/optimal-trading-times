@@ -33,17 +33,17 @@
     NY_PM_SECOND_HALF: RED
 
 - id: partial_holiday_day
-  priority: 91
+  priority: 124
   when:
     has_partial_holiday_today: true
-  day_color: WHITE
-  tradable: cautious
+  day_color: RED
+  tradable: no_trade
   reason: Partial holiday or early close day.
   session_colors:
-    London: WHITE
-    PreMarket: WHITE
-    NY_AM_FIRST_HALF: WHITE
-    NY_AM_SECOND_HALF: WHITE
+    London: RED
+    PreMarket: RED
+    NY_AM_FIRST_HALF: RED
+    NY_AM_SECOND_HALF: RED
     Lunch: RED
     NY_PM_FIRST_HALF: RED
     NY_PM_SECOND_HALF: RED
@@ -72,7 +72,7 @@
     weekday: FRI
   day_color: WHITE
   tradable: cautious
-  reason: NFP day. Let the release pass first.
+  reason: NFP day. Wait 15-30 minutes after the 8:30 release before treating NY AM as green.
   session_colors:
     London: RED
     PreMarket: RED
@@ -253,13 +253,30 @@
   tradable: cautious
   reason: 8:30am red-folder news today.
   session_colors:
-    London: WHITE
+    London: GREEN
     PreMarket: RED
     NY_AM_FIRST_HALF: GREEN
     NY_AM_SECOND_HALF: GREEN
     Lunch: GREEN
     NY_PM_FIRST_HALF: GREEN
     NY_PM_SECOND_HALF: GREEN
+
+- id: post_bank_holiday_no_major_news_day
+  priority: 6
+  when:
+    had_bank_holiday_yesterday: true
+    has_no_major_usd_news_today: true
+  day_color: WHITE
+  tradable: cautious
+  reason: Day after a USD bank holiday with no major USD news.
+  session_colors:
+    London: WHITE
+    PreMarket: WHITE
+    NY_AM_FIRST_HALF: WHITE
+    NY_AM_SECOND_HALF: WHITE
+    Lunch: WHITE
+    NY_PM_FIRST_HALF: WHITE
+    NY_PM_SECOND_HALF: WHITE
 
 - id: no_major_usd_news_day
   priority: 5
@@ -274,8 +291,8 @@
     NY_AM_FIRST_HALF: WHITE
     NY_AM_SECOND_HALF: WHITE
     Lunch: GREEN
-    NY_PM_FIRST_HALF: GREEN
-    NY_PM_SECOND_HALF: GREEN
+    NY_PM_FIRST_HALF: WHITE
+    NY_PM_SECOND_HALF: WHITE
 
 - id: default_green_day
   priority: 0

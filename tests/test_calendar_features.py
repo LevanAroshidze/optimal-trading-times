@@ -229,6 +229,48 @@ def test_calendar_feature_builder_detects_partial_holiday():
     assert features["has_bank_holiday_today"] is False
 
 
+def test_calendar_feature_builder_detects_full_bank_holiday_yesterday():
+    aliases = make_aliases()
+    builder = _builder(aliases)
+
+    events = [
+        CalendarEvent(
+            title="Bank Holiday",
+            country="USD",
+            impact="Holiday",
+            starts_at=datetime.fromisoformat("2026-04-01T08:30:00-04:00"),
+        )
+    ]
+
+    features = builder.build_for_date(date(2026, 4, 2), events)
+
+    assert features["had_bank_holiday_yesterday"] is True
+
+
+def test_calendar_feature_builder_ignores_partial_and_non_usd_holiday_yesterday():
+    aliases = make_aliases()
+    builder = _builder(aliases)
+
+    events = [
+        CalendarEvent(
+            title="Early Close",
+            country="USD",
+            impact="Holiday",
+            starts_at=datetime.fromisoformat("2026-04-01T13:00:00-04:00"),
+        ),
+        CalendarEvent(
+            title="Bank Holiday",
+            country="GBP",
+            impact="Holiday",
+            starts_at=datetime.fromisoformat("2026-04-01T08:30:00-04:00"),
+        ),
+    ]
+
+    features = builder.build_for_date(date(2026, 4, 2), events)
+
+    assert features["had_bank_holiday_yesterday"] is False
+
+
 def test_calendar_feature_builder_ignores_non_usd_holiday_days():
     aliases = make_aliases()
     builder = _builder(aliases)
@@ -328,3 +370,22 @@ def test_calendar_feature_builder_applies_non_core_pressure_overlay():
     assert analysis.pressure_overlay["PreMarket"] == DayColor.RED
     assert analysis.pressure_overlay["NY_AM_FIRST_HALF"] == DayColor.RED
 
+
+def test_calendar_feature_builder_keeps_london_clear_for_non_core_830_overlay():
+    aliases = make_aliases(title_aliases={})
+    builder = _builder(aliases)
+
+    events = [
+        CalendarEvent(
+            title="Retail Sales m/m",
+            country="USD",
+            impact="High",
+            starts_at=datetime.fromisoformat("2026-04-02T08:30:00-04:00"),
+        )
+    ]
+
+    analysis = builder.analyse_date(date(2026, 4, 2), events)
+
+    assert analysis.features["has_830_red_news"] is True
+    assert "London" not in analysis.pressure_overlay
+    assert analysis.pressure_overlay["PreMarket"] == DayColor.RED
