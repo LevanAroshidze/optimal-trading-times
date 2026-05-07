@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime, timedelta
+from email.utils import format_datetime
 
 import httpx
 import pytest
@@ -178,6 +180,36 @@ def test_429_with_long_retry_after_does_not_retry_immediately():
     assert not result.succeeded
     assert result.error == "HTTP 429 retry_after=300s"
     assert result.retry_after_seconds == 300
+    assert counter["calls"] == 1
+
+
+def test_429_with_http_date_retry_after_does_not_retry_immediately():
+    counter = {"calls": 0}
+    retry_at = datetime.now(tz=UTC) + timedelta(minutes=5)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        counter["calls"] += 1
+        return httpx.Response(
+            429,
+            headers={"Retry-After": format_datetime(retry_at, usegmt=True)},
+        )
+
+    transport = httpx.MockTransport(handler)
+    source = ForexFactoryCalendarSource(
+        urls=["https://example.com/a"],
+        timeout_seconds=1,
+        max_retries=3,
+        retry_backoff_seconds=0,
+    )
+
+    async def run():
+        async with httpx.AsyncClient(transport=transport) as client:
+            return await source._fetch_with_retries(client, source.urls[0])
+
+    result = asyncio.run(run())
+    assert not result.succeeded
+    assert result.retry_after_seconds is not None
+    assert result.retry_after_seconds > 250
     assert counter["calls"] == 1
 
 

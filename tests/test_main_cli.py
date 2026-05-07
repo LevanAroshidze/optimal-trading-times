@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import os
 from datetime import date
 
 import pytest
 
 from bot.config import load_app_config, load_event_aliases, load_messages, load_rules
-from bot.main import _build_components, main, parse_args
+from bot.main import _build_components, _load_local_env, main, parse_args
 from tests.conftest import CONFIG_DIR
 
 VALID_WEBHOOK_URL = "https://discord.com/api/webhooks/123456789012345678/abcDEFghi-_JKL"
@@ -106,6 +107,25 @@ def test_build_components_does_not_require_missing_ops_webhook(monkeypatch):
     )
 
     assert ops_sender is None
+
+
+def test_load_local_env_sets_missing_values_without_overriding(monkeypatch, tmp_path):
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/123456789012345678/fromfile\n"
+        "EXISTING=fromfile\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("DISCORD_WEBHOOK_URL", raising=False)
+    monkeypatch.setenv("EXISTING", "fromshell")
+
+    _load_local_env(env_path)
+
+    assert (
+        os.environ["DISCORD_WEBHOOK_URL"]
+        == "https://discord.com/api/webhooks/123456789012345678/fromfile"
+    )
+    assert os.environ["EXISTING"] == "fromshell"
 
 
 async def _async_raise(self):

@@ -13,6 +13,28 @@ from bot.models import (
 )
 from bot.type_defs import FeatureMap
 
+_FULL_USD_HOLIDAY_TERMS = (
+    "bank holiday",
+    "new year's day",
+    "martin luther king",
+    "presidents' day",
+    "president's day",
+    "memorial day",
+    "juneteenth",
+    "independence day",
+    "labor day",
+    "columbus day",
+    "veterans day",
+    "thanksgiving day",
+    "christmas day",
+    "good friday",
+)
+_IGNORED_USD_HOLIDAY_TERMS = (
+    "daylight saving",
+    "time shift",
+    "dst",
+)
+
 
 @dataclass(frozen=True)
 class EventCategoryMatch:
@@ -235,6 +257,7 @@ class CalendarFeatureBuilder:
             self._is_usd_event(match)
             and match.event.impact.casefold() == "holiday"
             and not self._is_partial_holiday_title(match.event.title)
+            and self._is_full_holiday_title(match.event.title)
             for match in today_events
         )
 
@@ -251,6 +274,12 @@ class CalendarFeatureBuilder:
     def _is_partial_holiday_title(self, title: str) -> bool:
         haystack = title.casefold()
         return any(term in haystack for term in self.aliases.partial_holiday_terms)
+
+    def _is_full_holiday_title(self, title: str) -> bool:
+        haystack = title.casefold()
+        if any(term in haystack for term in _IGNORED_USD_HOLIDAY_TERMS):
+            return False
+        return any(term in haystack for term in _FULL_USD_HOLIDAY_TERMS)
 
     def _has_pm_red_news(self, today_events: list[EventCategoryMatch]) -> bool:
         threshold = self.windows.pm_news_after_hour

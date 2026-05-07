@@ -63,16 +63,16 @@ Each box is a small module under `bot/`. The `Notifier` orchestrates the schedul
 
    If your local shell does not provide `python`, use `python3` for these commands.
 
-3. Copy `.env.example` to `.env` and fill in `DISCORD_WEBHOOK_URL`.
+3. Copy `.env.example` to `.env` and fill in `DISCORD_WEBHOOK_URL`, or export that variable in your shell/Railway service. Local `.env` values are loaded only when the command is run from this repo.
 4. Edit:
    - `config/app.yaml`
    - `config/event_aliases.yaml`
    - `config/rules.yaml`
    - `config/messages.yaml` (optional copy/styling)
-5. Sanity check by running a dry-run for tomorrow:
+5. Sanity check by running a dry-run for a sample date:
 
 	   ```bash
-	   python -m bot --dry-run --target-date 2026-04-17 --force-kind daily
+	   python -m bot --dry-run --target-date 2026-05-08 --force-kind daily
 	   ```
 
 6. Run for real once locally:
@@ -80,6 +80,8 @@ Each box is a small module under `bot/`. The `Notifier` orchestrates the schedul
    ```bash
    python -m bot
    ```
+
+Run commands from the repository root unless you pass `--config-dir`.
 
 ## CLI flags
 
@@ -122,9 +124,7 @@ If `DISCORD_OPS_WEBHOOK_URL` is set, limited ops-only alerts are sent for repeat
 ## Tests, lint, types
 
 ```bash
-ruff check bot tests
-mypy bot
-pytest -q
+PYTHONPATH=. pytest -q && ruff check bot tests && mypy bot && vulture bot --min-confidence 80 && git diff --check
 ```
 
 For a rule/debug view of a week:

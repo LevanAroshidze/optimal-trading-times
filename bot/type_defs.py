@@ -90,6 +90,7 @@ class StateSection(TypedDict, total=False):
     alerted_keys: list[str]
     source_retry_after: str | None
     weekly_retry_after: dict[str, str]
+    pending_posts: dict[str, str]
     fetched_at: str | None
     events: list[StructuredMapping]
 

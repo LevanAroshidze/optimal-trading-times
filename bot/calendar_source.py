@@ -4,7 +4,8 @@ import asyncio
 import logging
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import UTC, date, datetime
+from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
 from urllib.parse import urljoin
 
@@ -305,7 +306,16 @@ class ForexFactoryCalendarSource:
             try:
                 return max(0.0, float(header))
             except ValueError:
-                return None
+                try:
+                    retry_at = parsedate_to_datetime(header)
+                except (TypeError, ValueError):
+                    return None
+                if retry_at.tzinfo is None:
+                    retry_at = retry_at.replace(tzinfo=UTC)
+                return max(
+                    0.0,
+                    (retry_at.astimezone(UTC) - datetime.now(tz=UTC)).total_seconds(),
+                )
         try:
             data = response.json()
         except ValueError:

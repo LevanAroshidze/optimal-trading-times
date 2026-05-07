@@ -79,17 +79,11 @@ An event is treated as a partial holiday or early close when the title contains:
 - `early bond market close`
 - `early stock market close`
 
-### 8:30 AM Red-News Aliases
+Full USD holidays are limited to bank/market holiday titles such as `bank holiday`, `Thanksgiving Day`, `Christmas Day`, `Independence Day`, `Good Friday`, and similar named US closures. Time-shift markers such as `Daylight Saving Time Shift` are ignored.
 
-The 8:30 AM red-news rule can trigger when a high-impact USD event matches one of these titles and occurs at the configured 08:30 New York time:
+### 8:30 AM Red-News Rule
 
-- `core retail sales`
-- `retail sales`
-- `unemployment claims`
-- `pmi`
-- `jolts job openings`
-- `ism manufacturing pmi`
-- `ism services pmi`
+The 8:30 AM red-news rule triggers for any high-impact USD event at the configured 08:30 New York time that is not one of the strongest-category events: CPI, PPI, official NFP, FOMC, or Powell.
 
 ### PM Red-News Aliases
 
@@ -111,7 +105,7 @@ Legend for session columns:
 | Priority | Rule ID | Trigger | Day | Status | London | PreMkt | AM1 | AM2 | Lunch | PM1 | PM2 | Reason |
 | ---: | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 130 | weekend_no_trade | Saturday or Sunday | RED | no_trade | R | R | R | R | R | R | R | Weekend. Markets closed for this playbook. |
-| 125 | bank_holiday_no_trade | Full USD bank holiday today | RED | no_trade | R | R | R | R | R | R | R | USD bank holiday. |
+| 125 | bank_holiday_no_trade | Full USD bank/market holiday today | RED | no_trade | R | R | R | R | R | R | R | USD bank holiday. |
 | 124 | partial_holiday_day | Partial holiday or early-close day | RED | no_trade | R | R | R | R | R | R | R | Partial holiday or early close day. |
 | 120 | nfp_week_thursday | Current week is NFP week and today is Thursday | RED | no_trade | R | R | R | R | R | R | R | NFP week Thursday. |
 | 115 | nfp_week_friday | Current week is NFP week and today is Friday | WHITE | cautious | R | R | W | G | G | G | G | NFP day. Wait 15-30 minutes after the 8:30 release before treating NY AM as green. |
@@ -125,7 +119,7 @@ Legend for session columns:
 | 85 | powell_10am_previous_day | Powell speaks at 10:00 tomorrow | WHITE | cautious | W | W | W | W | W | R | R | Powell speaks at 10am tomorrow. |
 | 84 | powell_10am_today | Powell speaks at 10:00 today | WHITE | cautious | R | R | R | G | G | G | G | Powell speaks at 10am today. |
 | 80 | pm_red_news_today | High-impact PM red-folder USD event after 14:00 today | WHITE | cautious | G | G | R | R | R | R | G | PM red-folder news today. |
-| 70 | red_830_news_today | High-impact USD red-news alias at 08:30 today | WHITE | cautious | G | R | G | G | G | G | G | 8:30am red-folder news today. |
+| 70 | red_830_news_today | High-impact USD non-strong red-folder event at 08:30 today | WHITE | cautious | G | R | G | G | G | G | G | 8:30am red-folder news today. |
 | 6 | post_bank_holiday_no_major_news_day | Day after a full USD bank holiday with no major USD news today | WHITE | cautious | W | W | W | W | W | W | W | Day after a USD bank holiday with no major USD news. |
 | 5 | no_major_usd_news_day | No strongest or other red-folder USD news today | WHITE | cautious | G | G | W | W | G | W | W | No major USD news today. |
 | 0 | default_green_day | Fallback when no other rule matches | GREEN | trade | G | G | G | G | G | G | G | No blocking calendar condition. |

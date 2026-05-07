@@ -4,6 +4,7 @@ import contextlib
 import json
 import os
 import secrets
+import threading
 import time
 from collections.abc import Callable, Mapping
 from contextlib import AbstractContextManager, nullcontext
@@ -20,10 +21,11 @@ from bot.type_defs import (
     StructuredValue,
 )
 
-STATE_SCHEMA_VERSION = 3
+STATE_SCHEMA_VERSION = 4
 _LOCK_ACQUIRE_ATTEMPTS = 50
 _LOCK_RETRY_SLEEP_SECONDS = 0.05
 _LOCK_STALE_AFTER_SECONDS = 600
+_LOCK_HEARTBEAT_SECONDS = 60
 _LOCK_TOKEN_BYTES = 16
 
 
@@ -51,6 +53,7 @@ class OperationsState:
     alerted_keys: list[str] = field(default_factory=list)
     source_retry_after: str | None = None
     weekly_retry_after: dict[str, str] = field(default_factory=dict)
+    pending_posts: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -123,6 +126,7 @@ class StateStore:
                 alerted_keys=list(operations.get("alerted_keys", [])),
                 source_retry_after=operations.get("source_retry_after"),
                 weekly_retry_after=dict(operations.get("weekly_retry_after", {})),
+                pending_posts=dict(operations.get("pending_posts", {})),
             ),
             calendar_cache=CalendarCacheState(
                 fetched_at=calendar_cache.get("fetched_at"),
@@ -151,6 +155,7 @@ class StateStore:
                 "alerted_keys": state.operations.alerted_keys,
                 "source_retry_after": state.operations.source_retry_after,
                 "weekly_retry_after": state.operations.weekly_retry_after,
+                "pending_posts": state.operations.pending_posts,
             },
             "calendar_cache": {
                 "fetched_at": state.calendar_cache.fetched_at,
@@ -254,6 +259,10 @@ class StateStore:
             elif key == "weekly_retry_after" and name == "state.operations":
                 payload["weekly_retry_after"] = self._string_dict(
                     item, f"{name}.weekly_retry_after"
+                )
+            elif key == "pending_posts" and name == "state.operations":
+                payload["pending_posts"] = self._string_dict(
+                    item, f"{name}.pending_posts"
                 )
             elif key == "fetched_at" and name == "state.calendar_cache":
                 payload["fetched_at"] = self._optional_string(
@@ -359,6 +368,8 @@ class _FileLock:
         self._fd: int | None = None
         self._on_stale_recovered = on_stale_recovered
         self._token = secrets.token_hex(_LOCK_TOKEN_BYTES)
+        self._heartbeat_stop = threading.Event()
+        self._heartbeat_thread: threading.Thread | None = None
 
     def __enter__(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -370,12 +381,14 @@ class _FileLock:
                     0o600,
                 )
                 os.write(self._fd, self._token.encode("ascii"))
+                self._start_heartbeat()
                 return
             except FileExistsError:
                 self._steal_stale_lock()
         raise RuntimeError(f"Could not acquire state lock: {self.path}")
 
     def __exit__(self, _exc_type: object, _exc: object, _tb: object) -> None:
+        self._stop_heartbeat()
         if self._fd is not None:
             os.close(self._fd)
             self._fd = None
@@ -395,3 +408,24 @@ class _FileLock:
                 self._on_stale_recovered()
         else:
             time.sleep(_LOCK_RETRY_SLEEP_SECONDS)
+
+    def _start_heartbeat(self) -> None:
+        self._heartbeat_stop.clear()
+        self._heartbeat_thread = threading.Thread(
+            target=self._heartbeat,
+            name="state-lock-heartbeat",
+            daemon=True,
+        )
+        self._heartbeat_thread.start()
+
+    def _stop_heartbeat(self) -> None:
+        self._heartbeat_stop.set()
+        if self._heartbeat_thread is not None:
+            self._heartbeat_thread.join(timeout=1.0)
+            self._heartbeat_thread = None
+
+    def _heartbeat(self) -> None:
+        while not self._heartbeat_stop.wait(_LOCK_HEARTBEAT_SECONDS):
+            with contextlib.suppress(FileNotFoundError, OSError):
+                if self.path.read_text(encoding="ascii") == self._token:
+                    os.utime(self.path, None)

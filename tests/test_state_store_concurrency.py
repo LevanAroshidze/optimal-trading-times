@@ -4,6 +4,7 @@ import json
 import os
 import time
 
+import bot.state_store as state_store_module
 from bot.state_store import (
     _LOCK_STALE_AFTER_SECONDS,
     STATE_SCHEMA_VERSION,
@@ -69,6 +70,19 @@ def test_stale_lock_exit_does_not_delete_new_lock_owner(tmp_path):
         second.__exit__(None, None, None)
 
     assert not lock_path.exists()
+
+
+def test_lock_heartbeat_refreshes_active_lock_mtime(monkeypatch, tmp_path):
+    monkeypatch.setattr(state_store_module, "_LOCK_HEARTBEAT_SECONDS", 0.01)
+    state_path = tmp_path / "state.json"
+    lock_path = tmp_path / "state.lock"
+    store = StateStore(state_path, lock_path=lock_path)
+
+    with store.lock():
+        stale_time = time.time() - _LOCK_STALE_AFTER_SECONDS - 1
+        os.utime(lock_path, (stale_time, stale_time))
+        time.sleep(0.05)
+        assert time.time() - lock_path.stat().st_mtime < _LOCK_STALE_AFTER_SECONDS
 
 
 def test_load_handles_missing_operations_section(tmp_path):

@@ -24,11 +24,11 @@ With `policy.post_on_weekend: false`, Saturday/Sunday daily summaries and NY rec
 
 ## "Why did it post twice?"
 
-Discord can occasionally accept a webhook but the network blip means the process crashes before saving state. The next run sees `state.daily.posted_for_date` still empty and reposts. Mitigations:
+Discord can occasionally accept a webhook but the process can crash before final state is saved. The bot writes a `pending_posts` marker before sending and clears it only after final state is saved, so the next automatic run skips that post and alerts ops instead of blindly reposting. Mitigations:
 
 - Mount a persistent volume so `state.json` always survives restarts.
 - Set `runtime.lock_path` so two overlapping crons cannot both believe the post is due.
-- Watch logs for `posted kind=daily` followed by another within minutes.
+- Watch logs for `post_skipped reason=pending_confirmation`, then check Discord and `data/state.json` before forcing a repost.
 
 ## "How do I reset state?"
 
@@ -49,10 +49,10 @@ Forex Factory's calendar export is updated hourly and can rate-limit repeated ex
 
 The Sunday weekly outlook first tries the configured JSON feed. If that feed does not contain the coming week, it fetches the Forex Factory target-week calendar page and uses that page's JSON export. If neither live nor cached target-week data is available, it sends one ops alert and records a 60-minute retry cooldown so the cron does not hammer Forex Factory every 15 minutes.
 
-## "How do I dry-run for tomorrow before changing rules?"
+## "How do I dry-run a sample date before changing rules?"
 
 ```bash
-python -m bot --dry-run --target-date 2026-04-17 --force-kind daily
+python -m bot --dry-run --target-date 2026-05-08 --force-kind daily
 ```
 
 This builds the message in memory, prints it to stdout, and does not touch the webhook or `state.json`. Use `python3 -m bot ...` if your shell does not have a `python` command.
@@ -65,4 +65,4 @@ python -m bot --diagnose-week --target-date 2026-05-04
 
 ## "How do I migrate state to a new schema?"
 
-`state.json` carries `schema_version`. If you change `bot.state_store`, increment `STATE_SCHEMA_VERSION` and add a small migration in `_coerce_payload`. Old files without the field are treated as version 0 and auto-upgrade on next save. Schema v2 adds cached calendar events and deduped ops-alert keys. Schema v3 adds source and weekly retry cooldown timestamps.
+`state.json` carries `schema_version`. If you change `bot.state_store`, increment `STATE_SCHEMA_VERSION` and add a small migration in `_coerce_payload`. Old files without the field are treated as version 0 and auto-upgrade on next save. Schema v2 adds cached calendar events and deduped ops-alert keys. Schema v3 adds source and weekly retry cooldown timestamps. Schema v4 adds pending-post markers for duplicate prevention after partially completed Discord sends.

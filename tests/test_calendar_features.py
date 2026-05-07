@@ -211,6 +211,25 @@ def test_calendar_feature_builder_detects_usd_bank_holiday_only():
     assert features["has_bank_holiday_today"] is True
 
 
+def test_calendar_feature_builder_ignores_usd_time_shift_holiday_marker():
+    aliases = make_aliases()
+    builder = _builder(aliases)
+
+    events = [
+        CalendarEvent(
+            title="Daylight Saving Time Shift",
+            country="USD",
+            impact="Holiday",
+            starts_at=datetime.fromisoformat("2026-03-08T02:00:00-05:00"),
+        )
+    ]
+
+    features = builder.build_for_date(date(2026, 3, 8), events)
+
+    assert features["has_bank_holiday_today"] is False
+    assert features["has_partial_holiday_today"] is False
+
+
 def test_calendar_feature_builder_detects_partial_holiday():
     aliases = make_aliases()
     builder = _builder(aliases)

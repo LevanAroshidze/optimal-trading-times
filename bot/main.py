@@ -89,7 +89,25 @@ def _configure_logging(level: str) -> None:
 def _config_dir_from(args: argparse.Namespace) -> Path:
     if args.config_dir is not None:
         return args.config_dir
+    cwd_config = Path.cwd() / "config"
+    if cwd_config.exists():
+        return cwd_config
     return Path(__file__).resolve().parent.parent / "config"
+
+
+def _load_local_env(path: Path = Path(".env")) -> None:
+    if not path.exists():
+        return
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if not key:
+            continue
+        value = value.strip().strip("'\"")
+        os.environ.setdefault(key, value)
 
 
 def _load_all_config(
@@ -173,6 +191,7 @@ def _build_components(
 
 
 async def _run_async(args: argparse.Namespace) -> int:
+    _load_local_env()
     config_dir = _config_dir_from(args)
     app_config, aliases, rules, messages = _load_all_config(config_dir)
     summary_service, formatter, sender, ops_sender, state_store = _build_components(

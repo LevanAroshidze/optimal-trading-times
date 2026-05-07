@@ -423,7 +423,7 @@ def test_notifier_weekly_fetches_target_week_when_live_week_missing(tmp_path):
             events: list[CalendarEvent],
             source_status: SourceStatus = "live",
         ) -> WeeklyOutlook | None:
-            if source_status == "live":
+            if source_status == "live" and not events:
                 return None
             return super().build_weekly_outlook(week_start, events, source_status)
 
@@ -456,7 +456,7 @@ def test_notifier_weekly_fetches_target_week_when_live_week_missing(tmp_path):
 
     assert summary.week_load_count == 1
     assert sender.messages[0].startswith("Week Ahead")
-    assert "Using cached calendar data" in sender.messages[0]
+    assert "Using cached calendar data" not in sender.messages[0]
     assert state_store.load().calendar_cache.events == [target_event]
 
 
@@ -527,6 +527,86 @@ def test_notifier_persists_and_respects_source_retry_after(tmp_path):
     assert second_status == "unavailable"
     assert summary.load_count == 1
     assert state.operations.source_retry_after is not None
+
+
+def test_pending_post_marker_blocks_automatic_duplicate_and_alerts_ops(tmp_path):
+    state_store = StateStore(tmp_path / "state.json")
+    state_store.save(
+        BotState(
+            operations=OperationsState(
+                pending_posts={"daily:2026-04-16": "2026-04-16T05:00:00+00:00"}
+            )
+        )
+    )
+    ops_sender = FakeSender()
+    sender = FakeSender()
+    notifier = TradingCalendarNotifier(
+        app_config=make_app_config(str(tmp_path / "state.json")),
+        summary_service=FakeSummaryService(
+            [make_outlook("no_major_usd_news_day", "No major USD news today.", ["quiet"])]
+        ),
+        formatter=DiscordFormatter(),
+        sender=sender,
+        ops_sender=ops_sender,
+        state_store=state_store,
+    )
+
+    asyncio.run(notifier.run_once(datetime(2026, 4, 16, 5, 0, tzinfo=UTC)))
+
+    assert sender.messages == []
+    assert len(ops_sender.messages) == 1
+    state = state_store.load()
+    assert "pending_post:daily:2026-04-16" in state.operations.alerted_keys
+
+
+def test_pending_post_marker_survives_final_save_failure_to_prevent_repost(tmp_path):
+    class FailingFinalSaveStore(StateStore):
+        def __init__(self, path):
+            super().__init__(path)
+            self.save_count = 0
+
+        def save(self, state: BotState) -> None:
+            self.save_count += 1
+            if self.save_count == 2:
+                raise OSError("final save failed")
+            super().save(state)
+
+    state_path = tmp_path / "state.json"
+    state_store = FailingFinalSaveStore(state_path)
+    sender = FakeSender()
+    notifier = TradingCalendarNotifier(
+        app_config=make_app_config(str(state_path)),
+        summary_service=FakeSummaryService(
+            [make_outlook("no_major_usd_news_day", "No major USD news today.", ["quiet"])]
+        ),
+        formatter=DiscordFormatter(),
+        sender=sender,
+        state_store=state_store,
+    )
+    now = datetime(2026, 4, 16, 5, 0, tzinfo=UTC)
+
+    with pytest.raises(OSError, match="final save failed"):
+        asyncio.run(notifier.run_once(now))
+
+    assert len(sender.messages) == 1
+    assert "daily:2026-04-16" in StateStore(state_path).load().operations.pending_posts
+
+    retry_sender = FakeSender()
+    ops_sender = FakeSender()
+    retry_notifier = TradingCalendarNotifier(
+        app_config=make_app_config(str(state_path)),
+        summary_service=FakeSummaryService(
+            [make_outlook("no_major_usd_news_day", "No major USD news today.", ["quiet"])]
+        ),
+        formatter=DiscordFormatter(),
+        sender=retry_sender,
+        ops_sender=ops_sender,
+        state_store=StateStore(state_path),
+    )
+    asyncio.run(retry_notifier.run_once(now))
+
+    assert retry_sender.messages == []
+    assert len(ops_sender.messages) == 1
 
 
 def test_notifier_sends_ops_alert_once_at_source_failure_threshold(tmp_path):

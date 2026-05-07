@@ -32,8 +32,8 @@ These are the values your `when:` block can reference. They are computed by `Cal
 | `days_before_ppi` | int or null | Same for PPI. |
 | `has_cpi_today` | bool | True when CPI lands on the target date. |
 | `has_ppi_today` | bool | Same for PPI. |
-| `has_bank_holiday_today` | bool | Full USD bank holiday today. |
-| `had_bank_holiday_yesterday` | bool | Full USD bank holiday on the previous calendar day. |
+| `has_bank_holiday_today` | bool | Full USD bank/market holiday today. Time-shift calendar markers are ignored. |
+| `had_bank_holiday_yesterday` | bool | Full USD bank/market holiday on the previous calendar day. Time-shift calendar markers are ignored. |
 | `has_partial_holiday_today` | bool | Early-close / half-day on the calendar today. |
 | `has_830_red_news` | bool | A high-impact USD release at the AM red-news time configured in `windows.am_red_news_at`, excluding CPI/PPI/NFP/FOMC/Powell strongest-category events. |
 | `has_powell_10am_today` | bool | A Fed Chair Powell speech at the time configured in `windows.powell_speech_at`. |

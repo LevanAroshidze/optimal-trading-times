@@ -87,7 +87,7 @@ class TradingCalendarNotifier:
             if self.state_store.consume_stale_lock_recovered():
                 alert_sent = await self._send_ops_alert_once(
                     state,
-                    "state_lock_stale_recovered",
+                    f"state_lock_stale_recovered:{now.astimezone(UTC).date().isoformat()}",
                     "Recovered stale state lock",
                     "A stale state lock was removed before this run. Check for prior interrupted cron runs.",
                 )
@@ -97,7 +97,6 @@ class TradingCalendarNotifier:
                 now, self.app_config.morning_summary
             )
             daily_key = self._date_key(daily_target)
-            daily_due = self._is_daily_due(now, state, daily_key, daily_target)
 
             weekly_target = self._weekly_target_week_start(
                 now, self.app_config.weekly_outlook
@@ -106,6 +105,22 @@ class TradingCalendarNotifier:
                 weekly_target = (target_date_override or daily_target) - timedelta(
                     days=(target_date_override or daily_target).weekday()
                 )
+
+            recheck_target = target_date_override or self._schedule_date(
+                now, self.app_config.ny_recheck
+            )
+            recheck_key = self._date_key(recheck_target)
+            if self.force_kind is None:
+                alert_sent = await self._send_pending_post_alerts(
+                    state,
+                    daily_key=daily_key,
+                    weekly_target=weekly_target,
+                    recheck_key=recheck_key,
+                )
+                state_was_saved = state_was_saved or (alert_sent and not self.dry_run)
+
+            daily_due = self._is_daily_due(now, state, daily_key, daily_target)
+
             weekly_due = self._is_weekly_due(state, weekly_target)
             if (
                 weekly_due
@@ -120,10 +135,6 @@ class TradingCalendarNotifier:
                 )
                 weekly_due = False
 
-            recheck_target = target_date_override or self._schedule_date(
-                now, self.app_config.ny_recheck
-            )
-            recheck_key = self._date_key(recheck_target)
             recheck_due = self._is_recheck_due(
                 now, state, recheck_key, recheck_target
             )
@@ -283,6 +294,7 @@ class TradingCalendarNotifier:
                     alerted_keys=list(previous.alerted_keys),
                     source_retry_after=previous.source_retry_after,
                     weekly_retry_after=dict(previous.weekly_retry_after),
+                    pending_posts=dict(previous.pending_posts),
                 )
                 return "cached", cached_events, state.operations != previous
             state.operations = OperationsState(
@@ -291,6 +303,7 @@ class TradingCalendarNotifier:
                 alerted_keys=list(previous.alerted_keys),
                 source_retry_after=previous.source_retry_after,
                 weekly_retry_after=dict(previous.weekly_retry_after),
+                pending_posts=dict(previous.pending_posts),
             )
             return "unavailable", [], state.operations != previous
 
@@ -304,6 +317,7 @@ class TradingCalendarNotifier:
                 alerted_keys=list(previous.alerted_keys),
                 source_retry_after=source_retry_after,
                 weekly_retry_after=dict(previous.weekly_retry_after),
+                pending_posts=dict(previous.pending_posts),
             )
             logger.warning(
                 "calendar_unavailable consecutive_failures=%s error=%s",
@@ -332,6 +346,7 @@ class TradingCalendarNotifier:
                     alerted_keys=list(state.operations.alerted_keys),
                     source_retry_after=state.operations.source_retry_after,
                     weekly_retry_after=dict(state.operations.weekly_retry_after),
+                    pending_posts=dict(state.operations.pending_posts),
                 )
                 return "cached", cached_events, True
             return "unavailable", [], True
@@ -342,6 +357,7 @@ class TradingCalendarNotifier:
                 alerted_keys=list(previous.alerted_keys),
                 source_retry_after=None,
                 weekly_retry_after=dict(previous.weekly_retry_after),
+                pending_posts=dict(previous.pending_posts),
             )
             state.calendar_cache = CalendarCacheState(
                 fetched_at=now.astimezone(UTC).isoformat(),
@@ -367,6 +383,7 @@ class TradingCalendarNotifier:
                     alerted_keys=list(state.operations.alerted_keys),
                     source_retry_after=source_retry_after,
                     weekly_retry_after=dict(state.operations.weekly_retry_after),
+                    pending_posts=dict(state.operations.pending_posts),
                 )
             logger.warning(
                 "weekly_target_fetch_failed week_start=%s error=%s",
@@ -383,7 +400,7 @@ class TradingCalendarNotifier:
             events=list(weekly_events),
         )
         return self.summary_service.build_weekly_outlook(
-            weekly_target, weekly_events, "cached"
+            weekly_target, weekly_events, "live"
         )
 
     def _fresh_cached_events(
@@ -460,6 +477,44 @@ class TradingCalendarNotifier:
         logger.info("ops_alert_sent key=%s", key)
         return True
 
+    async def _send_pending_post_alerts(
+        self,
+        state: BotState,
+        *,
+        daily_key: str,
+        weekly_target: date | None,
+        recheck_key: str,
+    ) -> bool:
+        changed = False
+        candidates = [
+            ("daily", daily_key),
+            ("recheck", recheck_key),
+        ]
+        if weekly_target is not None:
+            candidates.append(("weekly", self._date_key(weekly_target)))
+
+        for kind, key in candidates:
+            marker = self._pending_post_marker(kind, key)
+            if marker not in state.operations.pending_posts:
+                continue
+            logger.warning(
+                "post_skipped reason=pending_confirmation marker=%s created_at=%s",
+                marker,
+                state.operations.pending_posts[marker],
+            )
+            alert_sent = await self._send_ops_alert_once(
+                state,
+                f"pending_post:{marker}",
+                "Pending Discord post needs review",
+                (
+                    "A previous run saved a pending post before sending/finalizing. "
+                    f"marker={marker} created_at={state.operations.pending_posts[marker]}. "
+                    "Check Discord and state before forcing a repost."
+                ),
+            )
+            changed = changed or alert_sent
+        return changed
+
     async def _send_ops_alert_without_state(self, title: str, body: str) -> None:
         if self.dry_run or self.ops_sender is None:
             logger.info("ops_alert_skipped title=%s", title)
@@ -482,6 +537,12 @@ class TradingCalendarNotifier:
             sent_messages.append(message)
             self._apply_state_update(state, kind, next_state)
             return
+
+        marker = self._post_marker_for_state(kind, next_state)
+        if marker is not None:
+            state.operations.pending_posts[marker] = datetime.now(tz=UTC).isoformat()
+            self.state_store.save(state)
+
         try:
             await self.sender.send_message(message)
         except WebhookError as error:
@@ -490,6 +551,8 @@ class TradingCalendarNotifier:
 
         sent_messages.append(message)
         self._apply_state_update(state, kind, next_state)
+        if marker is not None:
+            state.operations.pending_posts.pop(marker, None)
         self.state_store.save(state)
         logger.info("posted kind=%s length=%s", kind, len(message))
 
@@ -519,6 +582,8 @@ class TradingCalendarNotifier:
             return False
         if state.daily.posted_for_date == key:
             return False
+        if self._has_pending_post(state, "daily", key):
+            return False
         if not self._is_due(now, self.app_config.morning_summary):
             return False
         if self._is_post_too_late(now, self.app_config.morning_summary):
@@ -530,7 +595,10 @@ class TradingCalendarNotifier:
             return week_start is not None
         if self.force_kind is not None or week_start is None:
             return False
-        return state.weekly.posted_for_week_start != self._date_key(week_start)
+        key = self._date_key(week_start)
+        if state.weekly.posted_for_week_start == key:
+            return False
+        return not self._has_pending_post(state, "weekly", key)
 
     def _is_recheck_due(
         self, now: datetime, state: BotState, key: str, target_date: date
@@ -541,6 +609,8 @@ class TradingCalendarNotifier:
             return False
         if self.force_kind == "recheck":
             return True
+        if self._has_pending_post(state, "recheck", key):
+            return False
         if state.recheck.checked_for_date == key:
             return False
         if not self._is_due(now, self.app_config.ny_recheck):
@@ -563,6 +633,8 @@ class TradingCalendarNotifier:
     ) -> str:
         if state.daily.posted_for_date == key:
             return "already_posted"
+        if self._has_pending_post(state, "daily", key):
+            return "pending_confirmation"
         if not self._is_due(now, self.app_config.morning_summary):
             return "not_due_yet"
         if self._is_post_too_late(now, self.app_config.morning_summary):
@@ -589,6 +661,37 @@ class TradingCalendarNotifier:
 
     def _weekday_code(self, value: date) -> str:
         return value.strftime("%a").upper()[:3]
+
+    def _has_pending_post(self, state: BotState, kind: PostKind, key: str) -> bool:
+        return self._pending_post_marker(kind, key) in state.operations.pending_posts
+
+    def _pending_post_marker(self, kind: PostKind | str, key: str) -> str:
+        return f"{kind}:{key}"
+
+    def _post_marker_for_state(
+        self,
+        kind: PostKind,
+        next_state: DailyPostState | WeeklyPostState | RecheckState,
+    ) -> str | None:
+        if kind == "daily" and isinstance(next_state, DailyPostState):
+            return (
+                self._pending_post_marker(kind, next_state.posted_for_date)
+                if next_state.posted_for_date
+                else None
+            )
+        if kind == "weekly" and isinstance(next_state, WeeklyPostState):
+            return (
+                self._pending_post_marker(kind, next_state.posted_for_week_start)
+                if next_state.posted_for_week_start
+                else None
+            )
+        if kind == "recheck" and isinstance(next_state, RecheckState):
+            return (
+                self._pending_post_marker(kind, next_state.checked_for_date)
+                if next_state.checked_for_date
+                else None
+            )
+        return None
 
     def _schedule_clock(self, local_now: datetime) -> tuple[int, int]:
         return local_now.hour, local_now.minute
