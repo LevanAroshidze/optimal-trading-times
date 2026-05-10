@@ -7,6 +7,7 @@ import pytest
 
 from bot.config import load_app_config, load_event_aliases, load_messages, load_rules
 from bot.main import _build_components, _load_local_env, main, parse_args
+from bot.webhook_sender import WebhookError
 from tests.conftest import CONFIG_DIR
 
 VALID_WEBHOOK_URL = "https://discord.com/api/webhooks/123456789012345678/abcDEFghi-_JKL"
@@ -28,6 +29,14 @@ def test_parse_args_diagnose_week():
     args = parse_args(["--diagnose-week", "--target-date", "2026-04-16"])
     assert args.diagnose_week is True
     assert args.target_date == date(2026, 4, 16)
+
+
+def test_parse_args_preview_message_styles():
+    args = parse_args(["--preview-message-styles"])
+
+    assert args.preview_message_styles is True
+    assert args.preview_webhook_env == "DISCORD_PREVIEW_WEBHOOK_URL"
+    assert args.allow_prod_preview is False
 
 
 def test_parse_args_rejects_bad_date():
@@ -107,6 +116,41 @@ def test_build_components_does_not_require_missing_ops_webhook(monkeypatch):
     )
 
     assert ops_sender is None
+
+
+def test_preview_message_styles_sends_to_preview_webhook(monkeypatch, capsys):
+    sent = []
+
+    async def fake_send_message(self, content):
+        sent.append(content)
+
+    monkeypatch.setattr(
+        "bot.main.DiscordWebhookSender.send_message",
+        fake_send_message,
+    )
+    monkeypatch.setenv("DISCORD_PREVIEW_WEBHOOK_URL", VALID_WEBHOOK_URL)
+    monkeypatch.delenv("DISCORD_WEBHOOK_URL", raising=False)
+
+    rc = main(["--preview-message-styles", "--log-level", "ERROR"])
+
+    assert rc == 0
+    assert len(sent) == 9
+    assert "Sent 9 Discord style preview messages" in capsys.readouterr().out
+
+
+def test_preview_message_styles_requires_preview_webhook(monkeypatch):
+    monkeypatch.delenv("DISCORD_PREVIEW_WEBHOOK_URL", raising=False)
+
+    with pytest.raises(WebhookError, match="Missing required environment variable"):
+        main(["--preview-message-styles", "--log-level", "ERROR"])
+
+
+def test_preview_message_styles_refuses_production_webhook(monkeypatch):
+    monkeypatch.setenv("DISCORD_PREVIEW_WEBHOOK_URL", VALID_WEBHOOK_URL)
+    monkeypatch.setenv("DISCORD_WEBHOOK_URL", VALID_WEBHOOK_URL)
+
+    with pytest.raises(WebhookError, match="Refusing to send previews"):
+        main(["--preview-message-styles", "--log-level", "ERROR"])
 
 
 def test_load_local_env_sets_missing_values_without_overriding(monkeypatch, tmp_path):

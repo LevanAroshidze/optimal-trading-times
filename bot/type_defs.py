@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Literal, Protocol, TypeAlias, TypedDict
 
 if TYPE_CHECKING:
     from bot.models import CalendarEvent, DailyOutlook, WeeklyOutlook
+    from bot.webhook_sender import WebhookPayload
 
 
 StructuredScalar: TypeAlias = str | int | float | bool | None
@@ -54,7 +55,7 @@ class CalendarEventSource(Protocol):
 
 
 class WebhookSenderProtocol(Protocol):
-    async def send_message(self, content: str) -> None: ...
+    async def send_message(self, content: str | WebhookPayload) -> None: ...
 
 
 class SummaryServiceProtocol(Protocol):

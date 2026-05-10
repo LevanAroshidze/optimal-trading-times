@@ -22,7 +22,7 @@ from bot.type_defs import (
     SummaryServiceProtocol,
     WebhookSenderProtocol,
 )
-from bot.webhook_sender import WebhookError
+from bot.webhook_sender import WebhookError, WebhookPayload
 
 logger = logging.getLogger(__name__)
 
@@ -57,9 +57,9 @@ class TradingCalendarNotifier:
         self,
         now: datetime | None = None,
         target_date_override: date | None = None,
-    ) -> list[str]:
+    ) -> list[str | WebhookPayload]:
         now = now or datetime.now(tz=UTC)
-        sent_messages: list[str] = []
+        sent_messages: list[str | WebhookPayload] = []
 
         lock = self.state_store.lock()
         try:
@@ -159,7 +159,7 @@ class TradingCalendarNotifier:
                 todays_outlook = self.summary_service.build_outlook_for_date(
                     daily_target, events, source_status
                 )
-                message = self.formatter.format_daily(todays_outlook)
+                daily_message = self.formatter.format_daily(todays_outlook)
                 fingerprint = self.summary_service.daily_fingerprint(todays_outlook)
                 next_state = DailyPostState(
                     posted_for_date=daily_key,
@@ -167,7 +167,7 @@ class TradingCalendarNotifier:
                     snapshot=todays_outlook.calendar_snapshot,
                 )
                 await self._send_and_record(
-                    message, sent_messages, state, "daily", next_state
+                    daily_message, sent_messages, state, "daily", next_state
                 )
                 state_was_saved = not self.dry_run
             else:
@@ -198,9 +198,9 @@ class TradingCalendarNotifier:
                             weekly_target, cached_events, "cached"
                         )
                 if weekly_outlook is not None:
-                    message = self.formatter.format_weekly(weekly_outlook)
+                    weekly_message = self.formatter.format_weekly(weekly_outlook)
                     await self._send_and_record(
-                        message,
+                        weekly_message,
                         sent_messages,
                         state,
                         "weekly",
@@ -526,14 +526,15 @@ class TradingCalendarNotifier:
 
     async def _send_and_record(
         self,
-        message: str,
-        sent_messages: list[str],
+        message: str | WebhookPayload,
+        sent_messages: list[str | WebhookPayload],
         state: BotState,
         kind: PostKind,
         next_state: DailyPostState | WeeklyPostState | RecheckState,
     ) -> None:
+        message_length = len(self.formatter.render_for_console(message))
         if self.dry_run:
-            logger.info("dry_run_message kind=%s length=%s", kind, len(message))
+            logger.info("dry_run_message kind=%s length=%s", kind, message_length)
             sent_messages.append(message)
             self._apply_state_update(state, kind, next_state)
             return
@@ -554,7 +555,7 @@ class TradingCalendarNotifier:
         if marker is not None:
             state.operations.pending_posts.pop(marker, None)
         self.state_store.save(state)
-        logger.info("posted kind=%s length=%s", kind, len(message))
+        logger.info("posted kind=%s length=%s", kind, message_length)
 
     @staticmethod
     def _apply_state_update(

@@ -21,14 +21,15 @@ from bot.state_store import (
     StateStore,
 )
 from bot.type_defs import SourceStatus
+from bot.webhook_sender import WebhookPayload
 from tests.conftest import make_app_config, make_outlook
 
 
 class FakeSender:
     def __init__(self) -> None:
-        self.messages: list[str] = []
+        self.messages: list[str | WebhookPayload] = []
 
-    async def send_message(self, content: str) -> None:
+    async def send_message(self, content: str | WebhookPayload) -> None:
         self.messages.append(content)
 
 
@@ -126,7 +127,7 @@ def test_notifier_posts_recheck_update_when_outlook_changes(tmp_path):
     asyncio.run(notifier.run_once(recheck_now))
 
     assert len(sender.messages) == 2
-    assert sender.messages[-1].startswith("Update:")
+    assert _embed_title(sender.messages[-1]) == "Calendar Update"
 
 
 def test_notifier_posts_weekly_outlook_once(tmp_path):
@@ -160,7 +161,7 @@ def test_notifier_posts_weekly_outlook_once(tmp_path):
     asyncio.run(notifier.run_once(sunday_now))
 
     assert len(sender.messages) == 1
-    assert sender.messages[0].startswith("Week Ahead")
+    assert _render_message(sender.messages[0]).startswith("**Week Ahead")
 
 
 def test_notifier_posts_fail_safe_daily_message_when_calendar_is_unavailable(tmp_path):
@@ -200,7 +201,10 @@ def test_notifier_posts_fail_safe_daily_message_when_calendar_is_unavailable(tmp
     asyncio.run(notifier.run_once(now))
 
     assert len(sender.messages) == 1
-    assert "Red day. Calendar unavailable." in sender.messages[0]
+    assert _embed_title(sender.messages[0]) == "Calendar Unavailable"
+    assert "Calendar unavailable. Posting the fail-safe plan." in _render_message(
+        sender.messages[0]
+    )
 
 
 def test_notifier_persists_source_failures_when_no_message_is_sent(tmp_path):
@@ -310,7 +314,7 @@ def test_notifier_uses_fresh_cache_when_calendar_unavailable(tmp_path):
 
     asyncio.run(notifier.run_once(now))
 
-    assert "Using cached calendar data" in sender.messages[0]
+    assert "Source: cached calendar data" in _render_message(sender.messages[0])
     assert state_store.load().operations.last_source_status == "cached"
 
 
@@ -349,7 +353,9 @@ def test_notifier_ignores_stale_cache_when_calendar_unavailable(tmp_path):
 
     asyncio.run(notifier.run_once(now))
 
-    assert "Calendar source unavailable" in sender.messages[0]
+    assert "Source: calendar unavailable - fail-safe plan" in _render_message(
+        sender.messages[0]
+    )
 
 
 def test_notifier_weekly_uses_previous_cache_when_live_target_week_missing(tmp_path):
@@ -404,8 +410,8 @@ def test_notifier_weekly_uses_previous_cache_when_live_target_week_missing(tmp_p
 
     asyncio.run(notifier.run_once(now))
 
-    assert sender.messages[0].startswith("Week Ahead")
-    assert "Using cached calendar data" in sender.messages[0]
+    assert _render_message(sender.messages[0]).startswith("**Week Ahead")
+    assert "_Source: cached calendar data._" in _render_message(sender.messages[0])
 
 
 def test_notifier_weekly_fetches_target_week_when_live_week_missing(tmp_path):
@@ -455,8 +461,8 @@ def test_notifier_weekly_fetches_target_week_when_live_week_missing(tmp_path):
     asyncio.run(notifier.run_once(now))
 
     assert summary.week_load_count == 1
-    assert sender.messages[0].startswith("Week Ahead")
-    assert "Using cached calendar data" not in sender.messages[0]
+    assert _render_message(sender.messages[0]).startswith("**Week Ahead")
+    assert "cached calendar data" not in _render_message(sender.messages[0])
     assert state_store.load().calendar_cache.events == [target_event]
 
 
@@ -717,8 +723,8 @@ def test_recheck_uses_recheck_target_when_daily_target_differs(tmp_path):
 
     assert summary.requested_dates == [date(2026, 4, 17), date(2026, 4, 16)]
     assert len(sender.messages) == 2
-    assert sender.messages[1].startswith("Update:")
-    assert "CPI" in sender.messages[1]
+    assert _embed_title(sender.messages[1]) == "Calendar Update"
+    assert "CPI" in _render_message(sender.messages[1])
 
 
 def test_dry_run_send_updates_state_in_memory_without_persisting(tmp_path):
@@ -883,7 +889,7 @@ def test_notifier_posts_weekday_recheck_with_same_date_baseline(tmp_path):
     asyncio.run(notifier.run_once(datetime(2026, 5, 4, 12, 0, tzinfo=UTC)))
 
     assert len(sender.messages) == 1
-    assert sender.messages[0].startswith("Update:")
+    assert _embed_title(sender.messages[0]) == "Calendar Update"
 
 
 def test_notifier_posts_cached_recheck_update_with_same_date_baseline(tmp_path):
@@ -940,8 +946,8 @@ def test_notifier_posts_cached_recheck_update_with_same_date_baseline(tmp_path):
     asyncio.run(notifier.run_once(now))
 
     assert len(sender.messages) == 1
-    assert sender.messages[0].startswith("Update:")
-    assert "Using cached calendar data" in sender.messages[0]
+    assert _embed_title(sender.messages[0]) == "Calendar Update"
+    assert "Source: cached calendar data" in _render_message(sender.messages[0])
 
 
 def test_notifier_dry_run_does_not_send_or_persist(tmp_path):
@@ -993,9 +999,21 @@ def test_notifier_force_kind_emits_only_that_kind(tmp_path, force):
         )
     )
     if force == "weekly":
-        assert sent and sent[0].startswith("Week Ahead")
+        assert sent and _render_message(sent[0]).startswith("**Week Ahead")
     elif force == "daily":
-        assert sent and "day." in sent[0]
+        assert sent and _embed_title(sent[0])
     else:
         # recheck without a same-date daily baseline emits nothing.
         assert sent == []
+
+
+def _render_message(message: str | WebhookPayload) -> str:
+    return DiscordFormatter().render_for_console(message)
+
+
+def _embed_title(message: str | WebhookPayload) -> str:
+    assert isinstance(message, WebhookPayload)
+    assert len(message.embeds) == 1
+    title = message.embeds[0]["title"]
+    assert isinstance(title, str)
+    return title

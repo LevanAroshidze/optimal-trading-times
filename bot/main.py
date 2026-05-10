@@ -22,11 +22,17 @@ from bot.config import (
 )
 from bot.formatter import DiscordFormatter
 from bot.notifier import TradingCalendarNotifier
+from bot.preview_styles import build_preview_messages
 from bot.rule_engine import RuleEngine
 from bot.state_store import StateStore
 from bot.summary_service import DailySummaryService
 from bot.type_defs import PostKind, SourceStatus
-from bot.webhook_sender import DiscordWebhookSender, validate_webhook_url
+from bot.webhook_sender import (
+    DiscordWebhookSender,
+    WebhookError,
+    WebhookPayload,
+    validate_webhook_url,
+)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -64,6 +70,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--diagnose-week",
         action="store_true",
         help="Print matched rules and extracted calendar features for the target week.",
+    )
+    parser.add_argument(
+        "--preview-message-styles",
+        action="store_true",
+        help="Send Discord visual style previews to a dedicated preview webhook.",
+    )
+    parser.add_argument(
+        "--preview-webhook-env",
+        default="DISCORD_PREVIEW_WEBHOOK_URL",
+        help="Environment variable containing the preview webhook URL.",
+    )
+    parser.add_argument(
+        "--allow-prod-preview",
+        action="store_true",
+        help="Allow preview posts when preview webhook matches DISCORD_WEBHOOK_URL.",
     )
     return parser.parse_args(argv)
 
@@ -192,6 +213,10 @@ def _build_components(
 
 async def _run_async(args: argparse.Namespace) -> int:
     _load_local_env()
+    if args.preview_message_styles:
+        await _send_message_style_previews(args)
+        return 0
+
     config_dir = _config_dir_from(args)
     app_config, aliases, rules, messages = _load_all_config(config_dir)
     summary_service, formatter, sender, ops_sender, state_store = _build_components(
@@ -222,7 +247,10 @@ async def _run_async(args: argparse.Namespace) -> int:
 
     if args.dry_run:
         for index, message in enumerate(sent, start=1):
-            sys.stdout.write(f"--- message {index} ---\n{message}\n")
+            sys.stdout.write(
+                f"--- message {index} ---\n"
+                f"{formatter.render_for_console(message)}\n"
+            )
         if not sent:
             if args.force_kind == "weekly":
                 sys.stdout.write(
@@ -233,6 +261,29 @@ async def _run_async(args: argparse.Namespace) -> int:
                 sys.stdout.write("(no messages produced; nothing was due)\n")
 
     return 0
+
+
+async def _send_message_style_previews(args: argparse.Namespace) -> None:
+    preview_env = args.preview_webhook_env
+    preview_url = validate_webhook_url(os.getenv(preview_env, ""), preview_env)
+    production_url = os.getenv("DISCORD_WEBHOOK_URL", "").strip()
+    if (
+        production_url
+        and preview_url == production_url
+        and not args.allow_prod_preview
+    ):
+        raise WebhookError(
+            "Refusing to send previews to DISCORD_WEBHOOK_URL. "
+            "Set a separate preview webhook or pass --allow-prod-preview."
+        )
+
+    sender = DiscordWebhookSender(webhook_url=preview_url)
+    previews = build_preview_messages()
+    for preview in previews:
+        await sender.send_message(preview.payload)
+    sys.stdout.write(
+        f"Sent {len(previews)} Discord style preview messages via {preview_env}.\n"
+    )
 
 
 async def _print_week_diagnostics(
@@ -269,7 +320,7 @@ async def _print_week_diagnostics(
 class _NoopSender:
     """Fallback used in dry-run mode so the notifier sees a sender protocol object."""
 
-    async def send_message(self, content: str) -> None:
+    async def send_message(self, content: str | WebhookPayload) -> None:
         return None
 
 

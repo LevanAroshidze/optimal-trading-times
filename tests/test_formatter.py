@@ -2,6 +2,8 @@ from datetime import date
 
 from bot.formatter import DiscordFormatter
 from bot.models import DailyDecision, DailyOutlook, DayColor, TradableStatus, WeeklyOutlook
+from bot.preview_styles import PREVIEW_PREFIX, build_preview_messages
+from bot.webhook_sender import WebhookPayload
 
 
 def make_outlook() -> DailyOutlook:
@@ -31,17 +33,21 @@ def make_outlook() -> DailyOutlook:
 
 def test_formatter_builds_trader_style_daily_message():
     message = DiscordFormatter().format_daily(make_outlook())
+    embed = _only_embed(message)
 
-    assert "White day. CPI day." in message
-    assert "Focus: NY AM (Second Half) and NY PM." in message
-    assert "Caution: NY AM (First Half)." in message
-    assert "Avoid: London." in message
-    assert "PreMarket" not in message
-    assert "Lunch" not in message
+    assert embed["title"] == "CPI Day"
+    assert embed["color"] == 0xE0E0E0
+    assert _field(embed, "🟢 Focus") == "NY AM second half, NY PM"
+    assert _field(embed, "⚪ Caution") == "NY AM first half"
+    assert _field(embed, "🔴 Avoid") == "London"
+    rendered = DiscordFormatter().render_for_console(message)
+    assert "PreMarket" not in rendered
+    assert "Lunch" not in rendered
     assert (
-        "Strongest USD news: CPI at 8:30 AM NY time. "
+        "CPI at 8:30 AM NY time\n"
         "Wait 15-30 minutes after the release before looking for trades."
-    ) in message
+    ) in _field(embed, "Calendar")
+    assert embed["footer"] == {"text": "Source: live calendar"}
 
 
 def test_formatter_collapses_full_ny_am_and_ny_pm_sessions():
@@ -64,10 +70,42 @@ def test_formatter_collapses_full_ny_am_and_ny_pm_sessions():
     outlook = DailyOutlook(decision=decision, summary_reason="Clean day.")
 
     message = DiscordFormatter().format_daily(outlook)
+    embed = _only_embed(message)
 
-    assert "Focus: London and NY AM." in message
-    assert "NY AM (First Half)" not in message
-    assert "NY AM (Second Half)" not in message
+    assert _field(embed, "🟢 Focus") == "London, NY AM"
+    rendered = DiscordFormatter().render_for_console(message)
+    assert "NY AM (First Half)" not in rendered
+    assert "NY AM (Second Half)" not in rendered
+
+
+def test_formatter_builds_update_embed_with_change_field():
+    message = DiscordFormatter().format_update(
+        make_outlook(),
+        [
+            "Added strongest USD news: CPI at 8:30 AM NY time",
+            "Removed quiet-day marker",
+        ],
+    )
+    embed = _only_embed(message)
+
+    assert embed["title"] == "Calendar Update"
+    assert _field(embed, "Change") == (
+        "Added strongest USD news: CPI at 8:30 AM NY time\n"
+        "Removed quiet-day marker"
+    )
+    assert _field(embed, "🟢 Focus") == "NY AM second half, NY PM"
+    assert "CPI at 8:30 AM NY time" in _field(embed, "Calendar")
+
+
+def test_formatter_trims_long_update_change_field_for_discord_limits():
+    message = DiscordFormatter().format_update(
+        make_outlook(),
+        [f"Added calendar item {index}" for index in range(100)],
+    )
+    change = _field(_only_embed(message), "Change")
+
+    assert len(change) <= 1024
+    assert change.endswith("...")
 
 
 def test_formatter_hides_non_trading_sessions_entirely():
@@ -90,12 +128,14 @@ def test_formatter_hides_non_trading_sessions_entirely():
     outlook = DailyOutlook(decision=decision, summary_reason="Mixed day.")
 
     message = DiscordFormatter().format_daily(outlook)
+    embed = _only_embed(message)
+    rendered = DiscordFormatter().render_for_console(message)
 
-    assert "PreMarket" not in message
-    assert "Lunch" not in message
-    assert "Focus: NY PM." in message
-    assert "Caution: London." in message
-    assert "Avoid: NY AM." in message
+    assert "PreMarket" not in rendered
+    assert "Lunch" not in rendered
+    assert _field(embed, "🟢 Focus") == "NY PM"
+    assert _field(embed, "⚪ Caution") == "London"
+    assert _field(embed, "🔴 Avoid") == "NY AM"
 
 
 def test_formatter_builds_weekly_message():
@@ -103,8 +143,9 @@ def test_formatter_builds_weekly_message():
 
     message = DiscordFormatter().format_weekly(weekly)
 
-    assert message.startswith("Week Ahead")
-    assert "Thu: White day. CPI day." in message
+    assert message.startswith("**Week Ahead | Apr 20-24**")
+    assert "⚪ **Thu** — CPI day. CPI at 8:30 AM." in message
+    assert "White day." not in message
 
 
 def test_formatter_marks_cached_daily_and_weekly_messages():
@@ -122,8 +163,10 @@ def test_formatter_marks_cached_daily_and_weekly_messages():
 
     formatter = DiscordFormatter()
 
-    assert "Using cached calendar data" in formatter.format_daily(cached_daily)
-    assert "Using cached calendar data" in formatter.format_weekly(weekly)
+    daily = formatter.format_daily(cached_daily)
+
+    assert _only_embed(daily)["footer"] == {"text": "Source: cached calendar data"}
+    assert "_Source: cached calendar data._" in formatter.format_weekly(weekly)
 
 
 def test_formatter_does_not_duplicate_nfp_wait_copy():
@@ -143,9 +186,10 @@ def test_formatter_does_not_duplicate_nfp_wait_copy():
     )
 
     message = DiscordFormatter().format_daily(nfp)
+    rendered = DiscordFormatter().render_for_console(message)
 
-    assert message.count("Wait 15-30 minutes") == 1
-    assert "Strongest USD news: NFP at 8:30 AM NY time." in message
+    assert rendered.count("Wait 15-30 minutes") == 1
+    assert "NFP at 8:30 AM NY time" in rendered
 
 
 def test_formatter_includes_weekly_quiet_note():
@@ -163,3 +207,87 @@ def test_formatter_includes_weekly_quiet_note():
     message = DiscordFormatter().format_weekly(weekly)
 
     assert "09:50-10:10" in message
+    assert "No major USD news today. No major USD news." not in message
+    assert "No major USD news. Macro-time entries only." in message
+    assert "_Macro-time = 10 minutes before through 10 minutes after the hour" in message
+    assert "White day." not in message
+
+
+def test_formatter_trims_duplicate_quiet_note_prefix_in_daily_message():
+    quiet_note = (
+        "No major USD news. On NY AM and NY PM, only consider macro-time entries "
+        "10 minutes before through 10 minutes after the hour, for example 09:50-10:10."
+    )
+    outlook = DailyOutlook(
+        decision=make_outlook().decision,
+        summary_reason="No major USD news today.",
+        quiet_note=quiet_note,
+    )
+
+    message = DiscordFormatter().format_daily(outlook)
+    rendered = DiscordFormatter().render_for_console(message)
+
+    assert _only_embed(message)["title"] == "CPI Day"
+    assert "No major USD news. On NY AM" not in rendered
+    assert "On NY AM and NY PM" in _field(_only_embed(message), "Note")
+
+
+def test_formatter_keeps_calendar_field_on_no_major_news_daily_embed():
+    outlook = DailyOutlook(
+        decision=make_outlook().decision,
+        summary_reason="No major USD news today.",
+    )
+
+    message = DiscordFormatter().format_daily(outlook)
+
+    assert _field(_only_embed(message), "Calendar") == "No major USD news."
+
+
+def test_preview_styles_cover_three_formats_and_message_kinds():
+    previews = build_preview_messages()
+
+    assert len(previews) == 9
+    assert {preview.style for preview in previews} == {
+        "Style 1: Text + Color Only",
+        "Style 2: Small Icons",
+        "Style 3: Plain Labels",
+    }
+    assert {preview.kind for preview in previews} == {"daily", "update", "weekly"}
+
+
+def test_preview_styles_are_prefixed_and_include_embed_examples():
+    previews = build_preview_messages()
+    payload_text = "\n".join(_preview_payload_text(preview.payload) for preview in previews)
+
+    assert all(
+        _preview_payload_text(preview.payload).startswith(PREVIEW_PREFIX)
+        for preview in previews
+    )
+    assert any(isinstance(preview.payload, WebhookPayload) for preview in previews)
+    assert "White day." not in payload_text
+    assert "No major USD news today. No major USD news." not in payload_text
+    assert "Macro-time" in payload_text
+
+
+def _preview_payload_text(payload: str | WebhookPayload) -> str:
+    if isinstance(payload, str):
+        return payload
+    field_text = "\n".join(
+        f"{field.get('name', '')}\n{field.get('value', '')}"
+        for embed in payload.embeds
+        for field in embed.get("fields", [])
+    )
+    return "\n".join([payload.content, field_text])
+
+
+def _only_embed(payload: WebhookPayload) -> dict:
+    assert isinstance(payload, WebhookPayload)
+    assert len(payload.embeds) == 1
+    return payload.embeds[0]
+
+
+def _field(embed: dict, name: str) -> str:
+    for field in embed["fields"]:
+        if field["name"] == name:
+            return field["value"]
+    raise AssertionError(f"field not found: {name}")
