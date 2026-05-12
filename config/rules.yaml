@@ -197,6 +197,38 @@
     NY_PM_FIRST_HALF: WHITE
     NY_PM_SECOND_HALF: WHITE
 
+- id: ppi_minus_1
+  priority: 91
+  when:
+    days_before_ppi: 1
+  day_color: WHITE
+  tradable: cautious
+  reason: 1 day before PPI. Avoid NY AM and NY PM.
+  session_colors:
+    London: GREEN
+    PreMarket: GREEN
+    NY_AM_FIRST_HALF: RED
+    NY_AM_SECOND_HALF: RED
+    Lunch: GREEN
+    NY_PM_FIRST_HALF: RED
+    NY_PM_SECOND_HALF: RED
+
+- id: ppi_minus_2
+  priority: 90
+  when:
+    days_before_ppi: 2
+  day_color: WHITE
+  tradable: cautious
+  reason: 2 days before PPI. Mid conditions.
+  session_colors:
+    London: WHITE
+    PreMarket: WHITE
+    NY_AM_FIRST_HALF: WHITE
+    NY_AM_SECOND_HALF: WHITE
+    Lunch: WHITE
+    NY_PM_FIRST_HALF: WHITE
+    NY_PM_SECOND_HALF: WHITE
+
 - id: powell_10am_previous_day
   priority: 85
   when:
@@ -253,9 +285,9 @@
   tradable: cautious
   reason: 8:30am red-folder news today.
   session_colors:
-    London: GREEN
+    London: WHITE
     PreMarket: RED
-    NY_AM_FIRST_HALF: GREEN
+    NY_AM_FIRST_HALF: WHITE
     NY_AM_SECOND_HALF: GREEN
     Lunch: GREEN
     NY_PM_FIRST_HALF: GREEN

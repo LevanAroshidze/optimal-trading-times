@@ -194,6 +194,32 @@ def make_features(**overrides: FeatureValue) -> FeatureMap:
             },
         ),
         (
+            "ppi_minus_1",
+            make_features(weekday="WED", days_before_ppi=1),
+            {
+                "London": DayColor.GREEN,
+                "PreMarket": DayColor.GREEN,
+                "NY_AM_FIRST_HALF": DayColor.RED,
+                "NY_AM_SECOND_HALF": DayColor.RED,
+                "Lunch": DayColor.GREEN,
+                "NY_PM_FIRST_HALF": DayColor.RED,
+                "NY_PM_SECOND_HALF": DayColor.RED,
+            },
+        ),
+        (
+            "ppi_minus_2",
+            make_features(weekday="TUE", days_before_ppi=2),
+            {
+                "London": DayColor.WHITE,
+                "PreMarket": DayColor.WHITE,
+                "NY_AM_FIRST_HALF": DayColor.WHITE,
+                "NY_AM_SECOND_HALF": DayColor.WHITE,
+                "Lunch": DayColor.WHITE,
+                "NY_PM_FIRST_HALF": DayColor.WHITE,
+                "NY_PM_SECOND_HALF": DayColor.WHITE,
+            },
+        ),
+        (
             "powell_10am_previous_day",
             make_features(weekday="MON", days_until_powell_10am=1),
             {
@@ -236,9 +262,9 @@ def make_features(**overrides: FeatureValue) -> FeatureMap:
             "red_830_news_today",
             make_features(weekday="THU", has_830_red_news=True),
             {
-                "London": DayColor.GREEN,
+                "London": DayColor.WHITE,
                 "PreMarket": DayColor.RED,
-                "NY_AM_FIRST_HALF": DayColor.GREEN,
+                "NY_AM_FIRST_HALF": DayColor.WHITE,
                 "NY_AM_SECOND_HALF": DayColor.GREEN,
                 "Lunch": DayColor.GREEN,
                 "NY_PM_FIRST_HALF": DayColor.GREEN,

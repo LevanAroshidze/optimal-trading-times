@@ -11,6 +11,9 @@ class FakeSource:
     async def fetch_events(self) -> list[CalendarEvent]:
         return []
 
+    async def fetch_events_for_week(self, week_start: date) -> list[CalendarEvent]:
+        return []
+
 
 def make_service() -> DailySummaryService:
     aliases = make_aliases(
@@ -60,12 +63,14 @@ def test_summary_service_applies_pressure_overlay_to_default_green():
         ],
     )
 
+    assert outlook.decision.rule_id == "default_green_day"
     assert outlook.decision.day_color.value == "WHITE"
     assert outlook.summary_reason == "Other red-folder USD news today."
     assert outlook.decision.session_colors["PreMarket"].value == "RED"
+    assert outlook.decision.session_colors["NY_AM_FIRST_HALF"].value == "RED"
 
 
-def test_summary_service_keeps_london_green_for_non_core_830_news():
+def test_summary_service_uses_named_830_rule_for_non_core_red_news():
     service = make_service()
 
     outlook = service.build_outlook_for_date(
@@ -81,8 +86,10 @@ def test_summary_service_keeps_london_green_for_non_core_830_news():
     )
 
     assert outlook.decision.rule_id == "red_830_news_today"
-    assert outlook.decision.session_colors["London"].value == "GREEN"
+    assert outlook.decision.session_colors["London"].value == "WHITE"
     assert outlook.decision.session_colors["PreMarket"].value == "RED"
+    assert outlook.decision.session_colors["NY_AM_FIRST_HALF"].value == "WHITE"
+    assert outlook.decision.session_colors["NY_AM_SECOND_HALF"].value == "GREEN"
 
 
 def test_summary_service_matches_unaliased_high_impact_830_news():
@@ -101,7 +108,7 @@ def test_summary_service_matches_unaliased_high_impact_830_news():
     )
 
     assert outlook.decision.rule_id == "red_830_news_today"
-    assert outlook.decision.session_colors["London"].value == "GREEN"
+    assert outlook.decision.session_colors["London"].value == "WHITE"
 
 
 def test_summary_service_keeps_strong_830_news_london_red():
@@ -122,6 +129,37 @@ def test_summary_service_keeps_strong_830_news_london_red():
     assert outlook.decision.rule_id == "cpi_day"
     assert outlook.decision.session_colors["London"].value == "RED"
     assert outlook.decision.session_colors["PreMarket"].value == "RED"
+
+
+def test_summary_service_keeps_explicit_cpi_colors_with_later_red_news():
+    service = make_service()
+
+    outlook = service.build_outlook_for_date(
+        date(2026, 4, 14),
+        [
+            CalendarEvent(
+                title="CPI m/m",
+                country="USD",
+                impact="High",
+                starts_at=datetime.fromisoformat("2026-04-14T08:30:00-04:00"),
+            ),
+            CalendarEvent(
+                title="Fed Chair Nomination Vote",
+                country="USD",
+                impact="High",
+                starts_at=datetime.fromisoformat("2026-04-14T12:00:00-04:00"),
+            ),
+        ],
+    )
+
+    assert outlook.decision.rule_id == "cpi_day"
+    assert outlook.other_red_news_today == [
+        "Fed Chair Nomination Vote at 12:00 PM NY time"
+    ]
+    assert outlook.decision.session_colors["NY_AM_FIRST_HALF"].value == "WHITE"
+    assert outlook.decision.session_colors["NY_AM_SECOND_HALF"].value == "GREEN"
+    assert outlook.decision.session_colors["NY_PM_FIRST_HALF"].value == "GREEN"
+    assert outlook.decision.session_colors["NY_PM_SECOND_HALF"].value == "GREEN"
 
 
 def test_summary_service_applies_post_bank_holiday_quiet_rule():

@@ -189,6 +189,8 @@ class DiscordFormatter:
             "ppi_day": "PPI Day",
             "cpi_minus_1": "1 Day Before CPI",
             "cpi_minus_2": "2 Days Before CPI",
+            "ppi_minus_1": "1 Day Before PPI",
+            "ppi_minus_2": "2 Days Before PPI",
             "powell_10am_previous_day": "Powell Tomorrow",
             "powell_10am_today": "Powell Today",
             "pm_red_news_today": "PM Red-Folder News",
@@ -259,11 +261,13 @@ class DiscordFormatter:
             line += f"\n{self.messages.strong_news_advice}"
             lines.append(line)
         if outlook.other_red_news_today:
-            lines.append(
+            line = (
                 "Other red news: "
-                f"{self._join_items(outlook.other_red_news_today)}.\n"
-                f"{self.messages.other_red_news_advice}"
+                f"{self._join_items(outlook.other_red_news_today)}."
             )
+            if outlook.decision.rule_id == "default_green_day":
+                line += f"\n{self.messages.other_red_news_advice}"
+            lines.append(line)
         if outlook.strongest_news_tomorrow:
             lines.append(
                 "Tomorrow: "

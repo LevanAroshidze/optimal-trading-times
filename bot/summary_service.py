@@ -114,7 +114,7 @@ class DailySummaryService:
     def _apply_pressure_overlay(
         self, decision: DailyDecision, analysis: CalendarDayAnalysis
     ) -> DailyDecision:
-        if not analysis.pressure_overlay:
+        if decision.rule_id != "default_green_day" or not analysis.pressure_overlay:
             return decision
 
         session_colors = dict(decision.session_colors)

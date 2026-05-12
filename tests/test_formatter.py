@@ -192,6 +192,52 @@ def test_formatter_does_not_duplicate_nfp_wait_copy():
     assert "NFP at 8:30 AM NY time" in rendered
 
 
+def test_formatter_lists_other_red_news_without_generic_advice_on_explicit_rule():
+    outlook = make_outlook()
+    explicit = DailyOutlook(
+        decision=outlook.decision,
+        summary_reason=outlook.summary_reason,
+        strongest_news_today=outlook.strongest_news_today,
+        other_red_news_today=["Fed Chair Nomination Vote at 12:00 PM NY time"],
+    )
+
+    message = DiscordFormatter().format_daily(explicit)
+    calendar = _field(_only_embed(message), "Calendar")
+
+    assert "Other red news: Fed Chair Nomination Vote at 12:00 PM NY time." in calendar
+    assert "Avoid the 2-3 hours before the release." not in calendar
+
+
+def test_formatter_keeps_generic_advice_when_default_overlay_controls_plan():
+    decision = DailyDecision(
+        rule_id="default_green_day",
+        target_date=date(2026, 4, 17),
+        day_color=DayColor.WHITE,
+        tradable=TradableStatus.CAUTION,
+        session_colors={
+            "London": DayColor.GREEN,
+            "PreMarket": DayColor.RED,
+            "NY_AM_FIRST_HALF": DayColor.RED,
+            "NY_AM_SECOND_HALF": DayColor.GREEN,
+            "Lunch": DayColor.GREEN,
+            "NY_PM_FIRST_HALF": DayColor.GREEN,
+            "NY_PM_SECOND_HALF": DayColor.GREEN,
+        },
+        reason="No blocking calendar condition.",
+    )
+    outlook = DailyOutlook(
+        decision=decision,
+        summary_reason="Other red-folder USD news today.",
+        other_red_news_today=["Retail Sales m/m at 10:00 AM NY time"],
+    )
+
+    message = DiscordFormatter().format_daily(outlook)
+    calendar = _field(_only_embed(message), "Calendar")
+
+    assert "Other red news: Retail Sales m/m at 10:00 AM NY time." in calendar
+    assert "Avoid the 2-3 hours before the release." in calendar
+
+
 def test_formatter_includes_weekly_quiet_note():
     quiet_note = (
         "No major USD news. On NY AM and NY PM, only consider macro-time entries "

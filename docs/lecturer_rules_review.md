@@ -41,7 +41,7 @@ The bot computes calendar features for the target date, then checks all rules by
 - Higher priority wins.
 - The first matching rule is used.
 - A fallback rule always exists at priority `0`.
-- After the rule is chosen, the bot may apply an additional other-red-news pressure overlay to make affected sessions stricter. For non-strong 08:30 USD red-folder news, London is kept GREEN; the pre-market block carries the release risk.
+- Explicit rules keep their configured session colors. The generic other-red-news pressure overlay only applies when the fallback `default_green_day` rule matched.
 
 This means a higher-priority rule can override a lower-priority rule even if both are true.
 
@@ -116,10 +116,12 @@ Legend for session columns:
 | 94 | ppi_day | High-impact USD PPI today | WHITE | cautious | R | R | W | G | G | G | G | PPI day. |
 | 93 | cpi_minus_1 | CPI is 1 day away in the same week | WHITE | cautious | G | G | R | R | G | R | R | 1 day before CPI. Avoid NY AM and NY PM. |
 | 92 | cpi_minus_2 | CPI is 2 days away in the same week | WHITE | cautious | W | W | W | W | W | W | W | 2 days before CPI. Mid conditions. |
+| 91 | ppi_minus_1 | PPI is 1 day away in the same week | WHITE | cautious | G | G | R | R | G | R | R | 1 day before PPI. Avoid NY AM and NY PM. |
+| 90 | ppi_minus_2 | PPI is 2 days away in the same week | WHITE | cautious | W | W | W | W | W | W | W | 2 days before PPI. Mid conditions. |
 | 85 | powell_10am_previous_day | Powell speaks at 10:00 tomorrow | WHITE | cautious | W | W | W | W | W | R | R | Powell speaks at 10am tomorrow. |
 | 84 | powell_10am_today | Powell speaks at 10:00 today | WHITE | cautious | R | R | R | G | G | G | G | Powell speaks at 10am today. |
 | 80 | pm_red_news_today | High-impact PM red-folder USD event after 14:00 today | WHITE | cautious | G | G | R | R | R | R | G | PM red-folder news today. |
-| 70 | red_830_news_today | High-impact USD non-strong red-folder event at 08:30 today | WHITE | cautious | G | R | G | G | G | G | G | 8:30am red-folder news today. |
+| 70 | red_830_news_today | High-impact USD non-strong red-folder event at 08:30 today | WHITE | cautious | W | R | W | G | G | G | G | 8:30am red-folder news today. |
 | 6 | post_bank_holiday_no_major_news_day | Day after a full USD bank holiday with no major USD news today | WHITE | cautious | W | W | W | W | W | W | W | Day after a USD bank holiday with no major USD news. |
 | 5 | no_major_usd_news_day | No strongest or other red-folder USD news today | WHITE | cautious | G | G | W | W | G | W | W | No major USD news today. |
 | 0 | default_green_day | Fallback when no other rule matches | GREEN | trade | G | G | G | G | G | G | G | No blocking calendar condition. |
@@ -128,17 +130,17 @@ On no-major-USD-news days, the Discord note says NY AM and NY PM should only be 
 
 ## 7. Other Red-Folder USD News Overlay
 
-After the base rule is selected, the bot separately checks for high-impact USD events that are not strongest-category events and are not partial holidays.
+After the base rule is selected, the bot separately checks for high-impact USD events that are not strongest-category events and are not partial holidays. This overlay only changes the session map when the selected rule is `default_green_day`; for explicit rules, those events are listed for awareness but do not downgrade the configured sessions.
 
 For those events, it applies a pressure overlay:
 
 - pressure window starts 180 minutes before the event;
 - any session fully inside that window becomes RED;
 - any session containing the event time becomes RED;
-- any partly affected session becomes WHITE, except London is not downgraded for non-strong 08:30 red-folder releases;
+- any partly affected session becomes WHITE;
 - if multiple overlays apply, the stricter color wins.
 
-This overlay can make a session stricter than the base rule, but it does not make sessions more permissive.
+This overlay can make a clean fallback day stricter, but it does not make sessions more permissive and does not override explicit macro/session rules.
 
 Example:
 
@@ -146,7 +148,7 @@ Example:
 - It is treated as other red-folder USD news.
 - The 180-minute pressure window starts at 07:00.
 - PreMarket and the first NY AM segment can become stricter for 10:00 releases even if the base rule was otherwise green or white.
-- For any 08:30 high-impact USD release that is not CPI/PPI/NFP/FOMC/Powell, London stays GREEN and PreMarket carries the RED release-risk block, even if the title is not explicitly listed in the alias file.
+- For any 08:30 high-impact USD release that is not CPI/PPI/NFP/FOMC/Powell, the named 8:30 rule applies: London and NY AM first half are WHITE, PreMarket is RED, and later sessions are GREEN.
 
 ## 8. Calendar Source And Cache Rules
 

@@ -29,7 +29,7 @@ These are the values your `when:` block can reference. They are computed by `Cal
 | `weekday` | `MON..SUN` | Three-letter weekday code in the morning timezone. |
 | `week_type` | `"NFP"` or `null` | Whether the current week contains an NFP release. |
 | `days_before_cpi` | int or null | Days from the target date to the next USD CPI in the same week. |
-| `days_before_ppi` | int or null | Same for PPI. |
+| `days_before_ppi` | int or null | Same for PPI; used by the PPI lead-up rules. |
 | `has_cpi_today` | bool | True when CPI lands on the target date. |
 | `has_ppi_today` | bool | Same for PPI. |
 | `has_bank_holiday_today` | bool | Full USD bank/market holiday today. Time-shift calendar markers are ignored. |
@@ -46,6 +46,15 @@ These are the values your `when:` block can reference. They are computed by `Cal
 | `other_red_usd_news_today` | list[str] | Other red-folder USD events today. |
 
 Strongest-category features only use high-impact USD events. Alias excludes in `config/event_aliases.yaml` can keep lookalike events out of a category; for example, ADP Non-Farm Employment Change is excluded from official NFP classification.
+
+## Rule precedence and overlays
+
+Rules match by priority, and explicit rules keep their configured session colors. The generic other-red-news pressure overlay only applies when the selected rule is `default_green_day`; explicit macro/session rules such as CPI, PPI, NFP, Powell, PM red news, and 8:30 red news are not downgraded after matching.
+
+CPI and PPI both have two lead-up rules:
+
+- 2 days before: every session is WHITE.
+- 1 day before: London and PreMarket are GREEN, NY AM and NY PM are RED, and Lunch is GREEN.
 
 ## Operators
 
