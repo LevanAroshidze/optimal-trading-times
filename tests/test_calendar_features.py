@@ -95,6 +95,32 @@ def test_calendar_feature_builder_still_treats_official_release_as_nfp():
     assert analysis.strongest_news_today == ["NFP at 8:30 AM NY time"]
 
 
+def test_calendar_feature_builder_requires_friday_for_real_nfp():
+    aliases = make_aliases(
+        title_aliases={"NFP": ["non-farm employment change"]},
+        title_excludes={"NFP": ["adp"]},
+    )
+    builder = _builder(aliases)
+
+    events = [
+        CalendarEvent(
+            title="Non-Farm Employment Change",
+            country="USD",
+            impact="High",
+            starts_at=datetime.fromisoformat("2026-05-06T08:30:00-04:00"),
+        )
+    ]
+
+    analysis = builder.analyse_date(date(2026, 5, 6), events)
+
+    assert analysis.features["week_type"] is None
+    assert "NFP" not in analysis.features["categories_today"]
+    assert analysis.strongest_news_today == []
+    assert analysis.other_red_news_today == [
+        "Non-Farm Employment Change at 8:30 AM NY time"
+    ]
+
+
 def test_calendar_feature_builder_ignores_medium_impact_strong_alias():
     aliases = make_aliases(title_aliases={"CPI": ["cpi"]})
     builder = _builder(aliases)
@@ -349,6 +375,110 @@ def test_calendar_feature_builder_summarises_strong_and_other_red_news():
     assert analysis.other_red_news_today == ["Retail Sales m/m at 8:30 AM NY time"]
     assert analysis.strongest_news_tomorrow == [
         "Federal Funds Rate at 2:00 PM NY time"
+    ]
+
+
+def test_calendar_feature_builder_treats_federal_funds_rate_as_real_fomc():
+    aliases = make_aliases(
+        title_aliases={
+            "FOMC": ["federal funds rate", "fomc statement"],
+            "PM_RED": ["federal funds rate", "fomc statement"],
+        }
+    )
+    builder = _builder(aliases)
+
+    events = [
+        CalendarEvent(
+            title="Federal Funds Rate",
+            country="USD",
+            impact="High",
+            starts_at=datetime.fromisoformat("2026-05-06T14:00:00-04:00"),
+        )
+    ]
+
+    analysis = builder.analyse_date(date(2026, 5, 6), events)
+
+    assert analysis.features["has_pm_red_news"] is True
+    assert analysis.strongest_news_today == ["Federal Funds Rate at 2:00 PM NY time"]
+    assert analysis.other_red_news_today == []
+
+
+def test_calendar_feature_builder_treats_fomc_statement_as_real_fomc():
+    aliases = make_aliases(
+        title_aliases={
+            "FOMC": ["federal funds rate", "fomc statement"],
+            "PM_RED": ["federal funds rate", "fomc statement"],
+        }
+    )
+    builder = _builder(aliases)
+
+    events = [
+        CalendarEvent(
+            title="FOMC Statement",
+            country="USD",
+            impact="High",
+            starts_at=datetime.fromisoformat("2026-05-06T14:00:00-04:00"),
+        )
+    ]
+
+    analysis = builder.analyse_date(date(2026, 5, 6), events)
+
+    assert analysis.features["has_pm_red_news"] is True
+    assert analysis.strongest_news_today == ["FOMC Statement at 2:00 PM NY time"]
+    assert analysis.other_red_news_today == []
+
+
+def test_calendar_feature_builder_treats_fomc_press_conference_as_other_red():
+    aliases = make_aliases(
+        title_aliases={
+            "FOMC": ["federal funds rate", "fomc statement"],
+            "PM_RED": ["federal funds rate", "fomc statement"],
+        }
+    )
+    builder = _builder(aliases)
+
+    events = [
+        CalendarEvent(
+            title="FOMC Press Conference",
+            country="USD",
+            impact="High",
+            starts_at=datetime.fromisoformat("2026-05-06T14:30:00-04:00"),
+        )
+    ]
+
+    analysis = builder.analyse_date(date(2026, 5, 6), events)
+
+    assert analysis.features["has_pm_red_news"] is False
+    assert analysis.strongest_news_today == []
+    assert analysis.other_red_news_today == [
+        "FOMC Press Conference at 2:30 PM NY time"
+    ]
+
+
+def test_calendar_feature_builder_treats_fomc_meeting_minutes_as_other_red():
+    aliases = make_aliases(
+        title_aliases={
+            "FOMC": ["federal funds rate", "fomc statement"],
+            "PM_RED": ["federal funds rate", "fomc statement"],
+        }
+    )
+    builder = _builder(aliases)
+
+    events = [
+        CalendarEvent(
+            title="FOMC Meeting Minutes",
+            country="USD",
+            impact="High",
+            starts_at=datetime.fromisoformat("2026-05-06T14:00:00-04:00"),
+        )
+    ]
+
+    analysis = builder.analyse_date(date(2026, 5, 6), events)
+
+    assert analysis.features["has_pm_red_news"] is False
+    assert analysis.strongest_news_today == []
+    assert analysis.other_red_news_today == [
+        "FOMC Meeting Minutes at 2:00 PM NY time"
     ]
 
 

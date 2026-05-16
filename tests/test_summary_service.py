@@ -22,7 +22,7 @@ def make_service() -> DailySummaryService:
             "CPI": ["cpi"],
             "PPI": ["ppi"],
             "POWELL": ["fed chair powell speaks"],
-            "FOMC": ["federal funds rate", "fomc statement", "fomc press conference"],
+            "FOMC": ["federal funds rate", "fomc statement"],
             "RED_830AM": ["retail sales", "unemployment claims"],
         },
     )

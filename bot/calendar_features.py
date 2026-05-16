@@ -109,7 +109,11 @@ class CalendarFeatureBuilder:
             quiet_note = self.quiet_day_note
 
         categories_today = sorted(
-            {category for match in today_events for category in match.categories}
+            {
+                category
+                for match in today_events
+                for category in self._effective_categories(match)
+            }
         )
 
         powell_time = self.windows.powell_speech_at
@@ -208,9 +212,16 @@ class CalendarFeatureBuilder:
     def _is_strong_usd_event(self, match: EventCategoryMatch) -> bool:
         return self._is_usd_event(match) and self._is_high_impact_event(match)
 
+    def _effective_categories(self, match: EventCategoryMatch) -> set[str]:
+        categories = set(match.categories)
+        if "NFP" in categories and match.event.starts_at.weekday() != 4:
+            categories.remove("NFP")
+        return categories
+
     def _week_type(self, week_events: list[EventCategoryMatch]) -> str | None:
         if any(
-            "NFP" in match.categories and self._is_strong_usd_event(match)
+            "NFP" in self._effective_categories(match)
+            and self._is_strong_usd_event(match)
             for match in week_events
         ):
             return "NFP"
@@ -223,7 +234,7 @@ class CalendarFeatureBuilder:
             {
                 match.event.starts_at.date()
                 for match in events
-                if category in match.categories
+                if category in self._effective_categories(match)
                 and self._is_strong_usd_event(match)
                 and match.event.starts_at.date() >= target_date
             }
@@ -236,7 +247,7 @@ class CalendarFeatureBuilder:
         self, target_date: date, events: list[EventCategoryMatch], category: str
     ) -> bool:
         return any(
-            category in match.categories
+            category in self._effective_categories(match)
             and self._is_strong_usd_event(match)
             and match.event.starts_at.date() == target_date
             for match in events
@@ -285,9 +296,9 @@ class CalendarFeatureBuilder:
         threshold = self.windows.pm_news_after_hour
         return any(
             (
-                "FOMC" in match.categories
-                or "PM_RED" in match.categories
-                or "POWELL_PM" in match.categories
+                "FOMC" in self._effective_categories(match)
+                or "PM_RED" in self._effective_categories(match)
+                or "POWELL_PM" in self._effective_categories(match)
             )
             and self._is_strong_usd_event(match)
             and match.event.starts_at.hour >= threshold
@@ -302,7 +313,7 @@ class CalendarFeatureBuilder:
         minute: int,
     ) -> bool:
         return any(
-            category in match.categories
+            category in self._effective_categories(match)
             and self._is_strong_usd_event(match)
             and match.event.starts_at.hour == hour
             and match.event.starts_at.minute == minute
@@ -321,7 +332,7 @@ class CalendarFeatureBuilder:
             {
                 match.event.starts_at.date()
                 for match in events
-                if category in match.categories
+                if category in self._effective_categories(match)
                 and self._is_strong_usd_event(match)
                 and match.event.starts_at.hour == hour
                 and match.event.starts_at.minute == minute
@@ -341,7 +352,7 @@ class CalendarFeatureBuilder:
         for match in self._sorted_matches(events):
             if not self._is_strong_usd_event(match):
                 continue
-            if not (match.categories & categories):
+            if not (self._effective_categories(match) & categories):
                 continue
 
             summary = self._event_summary(self._display_name(match), match.event.starts_at)
@@ -372,26 +383,25 @@ class CalendarFeatureBuilder:
             self._is_usd_event(match)
             and match.event.impact.casefold() == "high"
             and not self._is_partial_holiday_title(match.event.title)
-            and not (match.categories & self.strongest_categories)
+            and not (self._effective_categories(match) & self.strongest_categories)
         )
 
     def _display_name(self, match: EventCategoryMatch) -> str:
-        if "NFP" in match.categories:
+        categories = self._effective_categories(match)
+        if "NFP" in categories:
             return "NFP"
-        if "CPI" in match.categories:
+        if "CPI" in categories:
             return "CPI"
-        if "PPI" in match.categories:
+        if "PPI" in categories:
             return "PPI"
-        if "POWELL" in match.categories:
+        if "POWELL" in categories:
             return "Powell speech"
-        if "FOMC" in match.categories:
+        if "FOMC" in categories:
             title = match.event.title.casefold()
             if "federal funds rate" in title:
                 return "Federal Funds Rate"
             if "fomc statement" in title:
                 return "FOMC Statement"
-            if "fomc press conference" in title:
-                return "FOMC Press Conference"
             return "FOMC"
         return match.event.title.strip()
 

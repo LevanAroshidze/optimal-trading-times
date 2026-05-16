@@ -58,15 +58,21 @@ These categories can drive the strongest calendar rules:
 | NFP | `non-farm employment change` |
 | CPI | `cpi`, `consumer price index` |
 | PPI | `ppi`, `producer price index` |
-| FOMC | `federal funds rate`, `fomc statement`, `fomc press conference` |
+| FOMC | `federal funds rate`, `fomc statement` |
 | POWELL | `fed chair powell speaks` |
 
 Important NFP detail:
 
 - ADP is excluded from NFP classification.
 - `ADP Non-Farm Employment Change` does not make the week an NFP week.
-- Official `Non-Farm Employment Change` still counts as NFP.
-- If ADP is high-impact USD, it is treated as ordinary red-folder USD news, not official NFP.
+- Official `Non-Farm Employment Change` counts as NFP only when the localized New York event date is Friday.
+- If ADP or a non-Friday `Non-Farm Employment Change` is high-impact USD, it is treated as ordinary red-folder USD news, not official NFP.
+
+Important FOMC detail:
+
+- `Federal Funds Rate` and `FOMC Statement` are the real FOMC events.
+- `FOMC Press Conference` and `FOMC Meeting Minutes` are not real FOMC for strongest-category or PM-red rules.
+- If press conferences or meeting minutes are high-impact USD, they are treated as ordinary red-folder USD news.
 
 ### Partial Holiday Terms
 
@@ -83,7 +89,7 @@ Full USD holidays are limited to bank/market holiday titles such as `bank holida
 
 ### 8:30 AM Red-News Rule
 
-The 8:30 AM red-news rule triggers for any high-impact USD event at the configured 08:30 New York time that is not one of the strongest-category events: CPI, PPI, official NFP, FOMC, or Powell.
+The 8:30 AM red-news rule triggers for any high-impact USD event at the configured 08:30 New York time that is not one of the strongest-category events: CPI, PPI, official Friday NFP, Federal Funds Rate, FOMC Statement, or Powell.
 
 ### PM Red-News Aliases
 
@@ -91,7 +97,6 @@ The PM red-news rule can trigger when a high-impact USD event after 14:00 New Yo
 
 - `federal funds rate`
 - `fomc statement`
-- `fomc press conference`
 - `fed chair powell speaks`
 
 ## 6. Current Rule Matrix
