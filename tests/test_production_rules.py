@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from bot.config import load_rules
-from bot.models import SESSION_ORDER, DayColor
+from bot.models import SESSION_ORDER, DayColor, TradableStatus
 from bot.rule_engine import RuleEngine
 from bot.type_defs import FeatureMap, FeatureValue
 
@@ -292,13 +292,13 @@ def make_features(**overrides: FeatureValue) -> FeatureMap:
                 has_no_major_usd_news_today=True,
             ),
             {
-                "London": DayColor.WHITE,
-                "PreMarket": DayColor.WHITE,
-                "NY_AM_FIRST_HALF": DayColor.WHITE,
-                "NY_AM_SECOND_HALF": DayColor.WHITE,
-                "Lunch": DayColor.WHITE,
-                "NY_PM_FIRST_HALF": DayColor.WHITE,
-                "NY_PM_SECOND_HALF": DayColor.WHITE,
+                "London": DayColor.RED,
+                "PreMarket": DayColor.RED,
+                "NY_AM_FIRST_HALF": DayColor.RED,
+                "NY_AM_SECOND_HALF": DayColor.RED,
+                "Lunch": DayColor.RED,
+                "NY_PM_FIRST_HALF": DayColor.RED,
+                "NY_PM_SECOND_HALF": DayColor.RED,
             },
         ),
         (
@@ -336,7 +336,7 @@ def test_production_rule_matrix(
                 had_bank_holiday_yesterday=True,
                 has_no_major_usd_news_today=True,
             ),
-            "nfp_week_monday",
+            "post_bank_holiday_no_major_news_day",
         ),
         (
             make_features(
@@ -345,7 +345,7 @@ def test_production_rule_matrix(
                 had_bank_holiday_yesterday=True,
                 has_no_major_usd_news_today=True,
             ),
-            "cpi_minus_1",
+            "post_bank_holiday_no_major_news_day",
         ),
         (
             make_features(
@@ -354,13 +354,56 @@ def test_production_rule_matrix(
                 had_bank_holiday_yesterday=True,
                 has_no_major_usd_news_today=True,
             ),
-            "powell_10am_previous_day",
+            "post_bank_holiday_no_major_news_day",
         ),
     ],
 )
-def test_post_bank_holiday_quiet_rule_stays_below_stronger_setups(
+def test_post_bank_holiday_quiet_rule_overrides_future_setups(
     features: FeatureMap, expected_rule: str
 ) -> None:
     decision = ENGINE.match(date(2026, 4, 13), features)
 
     assert decision.rule_id == expected_rule
+    assert decision.day_color == DayColor.RED
+    assert decision.tradable == TradableStatus.NO_TRADE
+
+
+@pytest.mark.parametrize(
+    ("features", "expected_rule"),
+    [
+        (
+            make_features(
+                weekday="SAT",
+                had_bank_holiday_yesterday=True,
+                has_no_major_usd_news_today=True,
+            ),
+            "weekend_no_trade",
+        ),
+        (
+            make_features(
+                weekday="MON",
+                has_bank_holiday_today=True,
+                had_bank_holiday_yesterday=True,
+                has_no_major_usd_news_today=True,
+            ),
+            "bank_holiday_no_trade",
+        ),
+        (
+            make_features(
+                weekday="MON",
+                had_bank_holiday_yesterday=True,
+                has_partial_holiday_today=True,
+                has_no_major_usd_news_today=True,
+            ),
+            "partial_holiday_day",
+        ),
+    ],
+)
+def test_post_bank_holiday_quiet_rule_stays_below_hard_closures(
+    features: FeatureMap, expected_rule: str
+) -> None:
+    decision = ENGINE.match(date(2026, 4, 13), features)
+
+    assert decision.rule_id == expected_rule
+    assert decision.day_color == DayColor.RED
+    assert decision.tradable == TradableStatus.NO_TRADE

@@ -48,6 +48,23 @@
     NY_PM_FIRST_HALF: RED
     NY_PM_SECOND_HALF: RED
 
+- id: post_bank_holiday_no_major_news_day
+  priority: 123
+  when:
+    had_bank_holiday_yesterday: true
+    has_no_major_usd_news_today: true
+  day_color: RED
+  tradable: no_trade
+  reason: Day after a USD bank holiday with no red-folder USD news.
+  session_colors:
+    London: RED
+    PreMarket: RED
+    NY_AM_FIRST_HALF: RED
+    NY_AM_SECOND_HALF: RED
+    Lunch: RED
+    NY_PM_FIRST_HALF: RED
+    NY_PM_SECOND_HALF: RED
+
 - id: nfp_week_thursday
   priority: 120
   when:
@@ -292,23 +309,6 @@
     Lunch: GREEN
     NY_PM_FIRST_HALF: GREEN
     NY_PM_SECOND_HALF: GREEN
-
-- id: post_bank_holiday_no_major_news_day
-  priority: 6
-  when:
-    had_bank_holiday_yesterday: true
-    has_no_major_usd_news_today: true
-  day_color: WHITE
-  tradable: cautious
-  reason: Day after a USD bank holiday with no major USD news.
-  session_colors:
-    London: WHITE
-    PreMarket: WHITE
-    NY_AM_FIRST_HALF: WHITE
-    NY_AM_SECOND_HALF: WHITE
-    Lunch: WHITE
-    NY_PM_FIRST_HALF: WHITE
-    NY_PM_SECOND_HALF: WHITE
 
 - id: no_major_usd_news_day
   priority: 5

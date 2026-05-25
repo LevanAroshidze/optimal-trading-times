@@ -94,7 +94,7 @@ Restrictions:
 
 ## Priority guidance
 
-- Reserve high priorities (>=120) for hard "no-trade" days (weekend, full holidays, partial holidays, NFP Thursday).
+- Reserve high priorities (>=120) for hard "no-trade" days (weekend, full holidays, partial holidays, day-after-bank-holiday/no-red-news days, NFP Thursday).
 - Mid priorities (80-110) are for high-impact USD news or NFP-week patterns.
 - Low priorities (1-15) are catch-all caution rules.
 - Priority 0 must be reserved for the fallback rule.

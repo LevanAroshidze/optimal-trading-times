@@ -278,6 +278,41 @@ def test_formatter_trims_duplicate_quiet_note_prefix_in_daily_message():
     assert "On NY AM and NY PM" in _field(_only_embed(message), "Note")
 
 
+def test_formatter_hides_post_holiday_no_trade_quiet_note():
+    quiet_note = (
+        "No major USD news. On NY AM and NY PM, only consider macro-time entries "
+        "10 minutes before through 10 minutes after the hour."
+    )
+    decision = DailyDecision(
+        rule_id="post_bank_holiday_no_major_news_day",
+        target_date=date(2026, 4, 14),
+        day_color=DayColor.RED,
+        tradable=TradableStatus.NO_TRADE,
+        session_colors={
+            "London": DayColor.RED,
+            "PreMarket": DayColor.RED,
+            "NY_AM_FIRST_HALF": DayColor.RED,
+            "NY_AM_SECOND_HALF": DayColor.RED,
+            "Lunch": DayColor.RED,
+            "NY_PM_FIRST_HALF": DayColor.RED,
+            "NY_PM_SECOND_HALF": DayColor.RED,
+        },
+        reason="Day after a USD bank holiday with no red-folder USD news.",
+    )
+    outlook = DailyOutlook(
+        decision=decision,
+        summary_reason=decision.reason,
+        quiet_note=quiet_note,
+    )
+
+    message = DiscordFormatter().format_daily(outlook)
+    embed = _only_embed(message)
+
+    assert embed["title"] == "Post-Holiday No Trade"
+    assert _field(embed, "🔴 Avoid") == "London, NY AM, NY PM"
+    assert all(field["name"] != "Note" for field in embed["fields"])
+
+
 def test_formatter_keeps_calendar_field_on_no_major_news_daily_embed():
     outlook = DailyOutlook(
         decision=make_outlook().decision,

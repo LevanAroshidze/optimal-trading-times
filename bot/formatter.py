@@ -195,7 +195,7 @@ class DiscordFormatter:
             "powell_10am_today": "Powell Today",
             "pm_red_news_today": "PM Red-Folder News",
             "red_830_news_today": "8:30 AM Red-Folder News",
-            "post_bank_holiday_no_major_news_day": "Post-Holiday Caution",
+            "post_bank_holiday_no_major_news_day": "Post-Holiday No Trade",
             "no_major_usd_news_day": "No Major USD News",
             "default_green_day": "Clean Calendar Day",
         }
@@ -243,6 +243,8 @@ class DiscordFormatter:
 
     def _quiet_note(self, outlook: DailyOutlook) -> str | None:
         if not outlook.quiet_note:
+            return None
+        if outlook.decision.rule_id == "post_bank_holiday_no_major_news_day":
             return None
         prefix = "No major USD news."
         if (

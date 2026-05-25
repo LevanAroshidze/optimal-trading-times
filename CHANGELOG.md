@@ -22,6 +22,7 @@ All notable changes are recorded here. Versions follow [SemVer](https://semver.o
 - `_setattr` dispatch in the notifier replaced by an explicit `match` statement on `PostKind`.
 - Recheck date now uses `app_config.ny_recheck` timezone (previously used the morning timezone).
 - Holiday detection: partial holidays now require an `impact == "holiday"` USD entry, aligned with full-holiday detection.
+- Day-after-bank-holiday days with no red-folder USD news are now hard no-trade days, while days with red-folder USD news still use the normal news rules.
 - `requirements.txt` removed; `pyproject.toml` is the source of truth for runtime and dev dependencies.
 - Dockerfile no longer declares `VOLUME ["/app/data"]` — Railway rejects `VOLUME` instructions; mount a Railway Volume at `/app/data` from the dashboard instead. The directory is still created at build time so non-Railway runs work without an explicit mount.
 

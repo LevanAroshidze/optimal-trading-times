@@ -112,6 +112,7 @@ Legend for session columns:
 | 130 | weekend_no_trade | Saturday or Sunday | RED | no_trade | R | R | R | R | R | R | R | Weekend. Markets closed for this playbook. |
 | 125 | bank_holiday_no_trade | Full USD bank/market holiday today | RED | no_trade | R | R | R | R | R | R | R | USD bank holiday. |
 | 124 | partial_holiday_day | Partial holiday or early-close day | RED | no_trade | R | R | R | R | R | R | R | Partial holiday or early close day. |
+| 123 | post_bank_holiday_no_major_news_day | Day after a full USD bank holiday with no red-folder USD news today | RED | no_trade | R | R | R | R | R | R | R | Day after a USD bank holiday with no red-folder USD news. |
 | 120 | nfp_week_thursday | Current week is NFP week and today is Thursday | RED | no_trade | R | R | R | R | R | R | R | NFP week Thursday. |
 | 115 | nfp_week_friday | Current week is NFP week and today is Friday | WHITE | cautious | R | R | W | G | G | G | G | NFP day. Wait 15-30 minutes after the 8:30 release before treating NY AM as green. |
 | 110 | nfp_week_wednesday | Current week is NFP week and today is Wednesday | WHITE | cautious | G | G | G | W | R | R | R | NFP week Wednesday. |
@@ -127,7 +128,6 @@ Legend for session columns:
 | 84 | powell_10am_today | Powell speaks at 10:00 today | WHITE | cautious | R | R | R | G | G | G | G | Powell speaks at 10am today. |
 | 80 | pm_red_news_today | High-impact PM red-folder USD event after 14:00 today | WHITE | cautious | G | G | R | R | R | R | G | PM red-folder news today. |
 | 70 | red_830_news_today | High-impact USD non-strong red-folder event at 08:30 today | WHITE | cautious | W | R | W | G | G | G | G | 8:30am red-folder news today. |
-| 6 | post_bank_holiday_no_major_news_day | Day after a full USD bank holiday with no major USD news today | WHITE | cautious | W | W | W | W | W | W | W | Day after a USD bank holiday with no major USD news. |
 | 5 | no_major_usd_news_day | No strongest or other red-folder USD news today | WHITE | cautious | G | G | W | W | G | W | W | No major USD news today. |
 | 0 | default_green_day | Fallback when no other rule matches | GREEN | trade | G | G | G | G | G | G | G | No blocking calendar condition. |
 
@@ -194,7 +194,7 @@ Rechecks also require a same-date daily baseline:
 
 ## 10. Day After Full USD Bank Holiday
 
-If yesterday was a full USD bank holiday and today has no major USD news, every session is WHITE/cautious. If today has strongest USD news or other high-impact red-folder USD news, the bot ignores the post-holiday quiet rule and applies the normal higher-priority news rule.
+If yesterday was a full USD bank holiday and today has no red-folder USD news, every session is RED/no_trade. This rule overrides future setup rules such as CPI/PPI/Powell tomorrow or NFP-week setup pressure. If today has strongest USD news or other high-impact red-folder USD news, the bot ignores the post-holiday quiet rule and applies the normal news rule.
 
 ## 11. Reviewer Questions
 

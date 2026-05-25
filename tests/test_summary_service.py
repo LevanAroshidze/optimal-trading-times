@@ -1,5 +1,7 @@
 from datetime import date, datetime
 
+import pytest
+
 from bot.config import load_rules
 from bot.models import CalendarEvent
 from bot.rule_engine import RuleEngine
@@ -178,36 +180,77 @@ def test_summary_service_applies_post_bank_holiday_quiet_rule():
     )
 
     assert outlook.decision.rule_id == "post_bank_holiday_no_major_news_day"
+    assert outlook.decision.day_color.value == "RED"
+    assert outlook.decision.tradable.value == "no_trade"
     assert {color.value for color in outlook.decision.session_colors.values()} == {
-        "WHITE"
+        "RED"
     }
 
 
-def test_summary_service_post_bank_holiday_with_strong_news_uses_normal_rule():
+@pytest.mark.parametrize(
+    ("target_date", "holiday_date", "news_title", "news_time", "expected_rule"),
+    [
+        (
+            date(2026, 4, 14),
+            "2026-04-13T08:30:00-04:00",
+            "CPI m/m",
+            "2026-04-14T08:30:00-04:00",
+            "cpi_day",
+        ),
+        (
+            date(2026, 4, 14),
+            "2026-04-13T08:30:00-04:00",
+            "PPI m/m",
+            "2026-04-14T08:30:00-04:00",
+            "ppi_day",
+        ),
+        (
+            date(2026, 4, 14),
+            "2026-04-13T08:30:00-04:00",
+            "Fed Chair Powell Speaks",
+            "2026-04-14T10:00:00-04:00",
+            "powell_10am_today",
+        ),
+        (
+            date(2026, 4, 17),
+            "2026-04-16T08:30:00-04:00",
+            "Non-Farm Employment Change",
+            "2026-04-17T08:30:00-04:00",
+            "nfp_week_friday",
+        ),
+    ],
+)
+def test_summary_service_post_bank_holiday_with_strong_news_today_uses_normal_rule(
+    target_date: date,
+    holiday_date: str,
+    news_title: str,
+    news_time: str,
+    expected_rule: str,
+) -> None:
     service = make_service()
 
     outlook = service.build_outlook_for_date(
-        date(2026, 4, 14),
+        target_date,
         [
             CalendarEvent(
                 title="Bank Holiday",
                 country="USD",
                 impact="Holiday",
-                starts_at=datetime.fromisoformat("2026-04-13T08:30:00-04:00"),
+                starts_at=datetime.fromisoformat(holiday_date),
             ),
             CalendarEvent(
-                title="CPI m/m",
+                title=news_title,
                 country="USD",
                 impact="High",
-                starts_at=datetime.fromisoformat("2026-04-14T08:30:00-04:00"),
+                starts_at=datetime.fromisoformat(news_time),
             ),
         ],
     )
 
-    assert outlook.decision.rule_id == "cpi_day"
+    assert outlook.decision.rule_id == expected_rule
 
 
-def test_summary_service_post_bank_holiday_with_other_red_news_uses_normal_rule():
+def test_summary_service_post_bank_holiday_with_830_red_news_today_uses_normal_rule():
     service = make_service()
 
     outlook = service.build_outlook_for_date(
@@ -229,6 +272,60 @@ def test_summary_service_post_bank_holiday_with_other_red_news_uses_normal_rule(
     )
 
     assert outlook.decision.rule_id == "red_830_news_today"
+
+
+def test_summary_service_post_bank_holiday_with_other_red_news_today_uses_overlay():
+    service = make_service()
+
+    outlook = service.build_outlook_for_date(
+        date(2026, 4, 14),
+        [
+            CalendarEvent(
+                title="Bank Holiday",
+                country="USD",
+                impact="Holiday",
+                starts_at=datetime.fromisoformat("2026-04-13T08:30:00-04:00"),
+            ),
+            CalendarEvent(
+                title="Retail Sales m/m",
+                country="USD",
+                impact="High",
+                starts_at=datetime.fromisoformat("2026-04-14T10:00:00-04:00"),
+            ),
+        ],
+    )
+
+    assert outlook.decision.rule_id == "default_green_day"
+    assert outlook.decision.day_color.value == "WHITE"
+    assert outlook.decision.tradable.value == "cautious"
+    assert outlook.decision.session_colors["PreMarket"].value == "RED"
+    assert outlook.decision.session_colors["NY_AM_FIRST_HALF"].value == "RED"
+
+
+def test_summary_service_post_bank_holiday_without_red_news_overrides_future_setups():
+    service = make_service()
+
+    outlook = service.build_outlook_for_date(
+        date(2026, 4, 14),
+        [
+            CalendarEvent(
+                title="Bank Holiday",
+                country="USD",
+                impact="Holiday",
+                starts_at=datetime.fromisoformat("2026-04-13T08:30:00-04:00"),
+            ),
+            CalendarEvent(
+                title="CPI m/m",
+                country="USD",
+                impact="High",
+                starts_at=datetime.fromisoformat("2026-04-15T08:30:00-04:00"),
+            ),
+        ],
+    )
+
+    assert outlook.decision.rule_id == "post_bank_holiday_no_major_news_day"
+    assert outlook.decision.day_color.value == "RED"
+    assert outlook.decision.tradable.value == "no_trade"
 
 
 def test_summary_service_partial_holiday_is_all_red():
