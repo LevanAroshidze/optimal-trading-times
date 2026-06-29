@@ -23,16 +23,19 @@ title_aliases:
     - ppi
     - producer price index
   POWELL:
-    - fed chair powell speaks
+    - fed chair warsh speaks
+    - fed chairman warsh speaks
   POWELL_PM:
-    - fed chair powell speaks
+    - fed chair warsh speaks
+    - fed chairman warsh speaks
   FOMC:
     - federal funds rate
     - fomc statement
   PM_RED:
     - federal funds rate
     - fomc statement
-    - fed chair powell speaks
+    - fed chair warsh speaks
+    - fed chairman warsh speaks
   RED_830AM:
     - core retail sales
     - retail sales

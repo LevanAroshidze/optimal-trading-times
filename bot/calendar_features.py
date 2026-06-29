@@ -395,7 +395,7 @@ class CalendarFeatureBuilder:
         if "PPI" in categories:
             return "PPI"
         if "POWELL" in categories:
-            return "Powell speech"
+            return "Warsh speech"
         if "FOMC" in categories:
             title = match.event.title.casefold()
             if "federal funds rate" in title:

@@ -252,7 +252,7 @@
     days_until_powell_10am: 1
   day_color: WHITE
   tradable: cautious
-  reason: Powell speaks at 10am tomorrow.
+  reason: Warsh speaks tomorrow.
   session_colors:
     London: WHITE
     PreMarket: WHITE
@@ -268,7 +268,7 @@
     has_powell_10am_today: true
   day_color: WHITE
   tradable: cautious
-  reason: Powell speaks at 10am today.
+  reason: Warsh speaks today.
   session_colors:
     London: RED
     PreMarket: RED

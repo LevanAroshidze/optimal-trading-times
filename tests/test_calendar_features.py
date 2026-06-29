@@ -15,12 +15,12 @@ def _builder(aliases=None) -> CalendarFeatureBuilder:
     )
 
 
-def test_calendar_feature_builder_detects_nfp_and_powell_offset():
+def test_calendar_feature_builder_detects_nfp_and_warsh_offset():
     aliases = make_aliases(
         title_aliases={
             "NFP": ["non-farm employment change"],
             "CPI": ["cpi"],
-            "POWELL": ["fed chair powell speaks"],
+            "POWELL": ["fed chairman warsh speaks"],
             "RED_830AM": ["unemployment claims"],
         }
     )
@@ -34,18 +34,18 @@ def test_calendar_feature_builder_detects_nfp_and_powell_offset():
             starts_at=datetime.fromisoformat("2026-04-03T08:30:00-04:00"),
         ),
         CalendarEvent(
-            title="Fed Chair Powell Speaks",
+            title="Fed Chairman Warsh Speaks",
             country="USD",
             impact="High",
-            starts_at=datetime.fromisoformat("2026-04-02T10:00:00-04:00"),
+            starts_at=datetime.fromisoformat("2026-04-02T09:00:00-04:00"),
         ),
     ]
 
     nfp_features = builder.build_for_date(date(2026, 3, 30), events)
-    powell_previous_day_features = builder.build_for_date(date(2026, 4, 1), events)
+    warsh_previous_day_features = builder.build_for_date(date(2026, 4, 1), events)
 
     assert nfp_features["week_type"] == "NFP"
-    assert powell_previous_day_features["days_until_powell_10am"] == 1
+    assert warsh_previous_day_features["days_until_powell_10am"] == 1
 
 
 def test_calendar_feature_builder_does_not_treat_adp_as_nfp():

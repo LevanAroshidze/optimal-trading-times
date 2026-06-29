@@ -34,7 +34,7 @@ windows:
   pre_release_pressure_minutes: 180
   pm_news_after_hour: 14
   am_red_news_at: "08:30"
-  powell_speech_at: "10:00"
+  powell_speech_at: "09:00"
   session_windows:
     London:
       start: "03:00"

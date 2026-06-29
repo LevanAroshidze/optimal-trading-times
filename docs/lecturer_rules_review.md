@@ -59,7 +59,7 @@ These categories can drive the strongest calendar rules:
 | CPI | `cpi`, `consumer price index` |
 | PPI | `ppi`, `producer price index` |
 | FOMC | `federal funds rate`, `fomc statement` |
-| POWELL | `fed chair powell speaks` |
+| POWELL | `fed chair warsh speaks`, `fed chairman warsh speaks` |
 
 Important NFP detail:
 
@@ -89,7 +89,7 @@ Full USD holidays are limited to bank/market holiday titles such as `bank holida
 
 ### 8:30 AM Red-News Rule
 
-The 8:30 AM red-news rule triggers for any high-impact USD event at the configured 08:30 New York time that is not one of the strongest-category events: CPI, PPI, official Friday NFP, Federal Funds Rate, FOMC Statement, or Powell.
+The 8:30 AM red-news rule triggers for any high-impact USD event at the configured 08:30 New York time that is not one of the strongest-category events: CPI, PPI, official Friday NFP, Federal Funds Rate, FOMC Statement, or Warsh.
 
 ### PM Red-News Aliases
 
@@ -97,7 +97,8 @@ The PM red-news rule can trigger when a high-impact USD event after 14:00 New Yo
 
 - `federal funds rate`
 - `fomc statement`
-- `fed chair powell speaks`
+- `fed chair warsh speaks`
+- `fed chairman warsh speaks`
 
 ## 6. Current Rule Matrix
 
@@ -124,8 +125,8 @@ Legend for session columns:
 | 92 | cpi_minus_2 | CPI is 2 days away in the same week | WHITE | cautious | W | W | W | W | W | W | W | 2 days before CPI. Mid conditions. |
 | 91 | ppi_minus_1 | PPI is 1 day away in the same week | WHITE | cautious | G | G | R | R | G | R | R | 1 day before PPI. Avoid NY AM and NY PM. |
 | 90 | ppi_minus_2 | PPI is 2 days away in the same week | WHITE | cautious | W | W | W | W | W | W | W | 2 days before PPI. Mid conditions. |
-| 85 | powell_10am_previous_day | Powell speaks at 10:00 tomorrow | WHITE | cautious | W | W | W | W | W | R | R | Powell speaks at 10am tomorrow. |
-| 84 | powell_10am_today | Powell speaks at 10:00 today | WHITE | cautious | R | R | R | G | G | G | G | Powell speaks at 10am today. |
+| 85 | powell_10am_previous_day | Warsh speaks at the configured Fed-chair speech time tomorrow | WHITE | cautious | W | W | W | W | W | R | R | Warsh speaks tomorrow. |
+| 84 | powell_10am_today | Warsh speaks at the configured Fed-chair speech time today | WHITE | cautious | R | R | R | G | G | G | G | Warsh speaks today. |
 | 80 | pm_red_news_today | High-impact PM red-folder USD event after 14:00 today | WHITE | cautious | G | G | R | R | R | R | G | PM red-folder news today. |
 | 70 | red_830_news_today | High-impact USD non-strong red-folder event at 08:30 today | WHITE | cautious | W | R | W | G | G | G | G | 8:30am red-folder news today. |
 | 5 | no_major_usd_news_day | No strongest or other red-folder USD news today | WHITE | cautious | G | G | W | W | G | W | W | No major USD news today. |
@@ -149,11 +150,11 @@ This overlay can make a clean fallback day stricter, but it does not make sessio
 
 Example:
 
-- A 10:00 high-impact USD ISM Services PMI is not CPI/PPI/NFP/FOMC/Powell.
+- A 10:00 high-impact USD ISM Services PMI is not CPI/PPI/NFP/FOMC/Warsh.
 - It is treated as other red-folder USD news.
 - The 180-minute pressure window starts at 07:00.
 - PreMarket and the first NY AM segment can become stricter for 10:00 releases even if the base rule was otherwise green or white.
-- For any 08:30 high-impact USD release that is not CPI/PPI/NFP/FOMC/Powell, the named 8:30 rule applies: London and NY AM first half are WHITE, PreMarket is RED, and later sessions are GREEN.
+- For any 08:30 high-impact USD release that is not CPI/PPI/NFP/FOMC/Warsh, the named 8:30 rule applies: London and NY AM first half are WHITE, PreMarket is RED, and later sessions are GREEN.
 
 ## 8. Calendar Source And Cache Rules
 
@@ -194,7 +195,7 @@ Rechecks also require a same-date daily baseline:
 
 ## 10. Day After Full USD Bank Holiday
 
-If yesterday was a full USD bank holiday and today has no red-folder USD news, every session is RED/no_trade. This rule overrides future setup rules such as CPI/PPI/Powell tomorrow or NFP-week setup pressure. If today has strongest USD news or other high-impact red-folder USD news, the bot ignores the post-holiday quiet rule and applies the normal news rule.
+If yesterday was a full USD bank holiday and today has no red-folder USD news, every session is RED/no_trade. This rule overrides future setup rules such as CPI/PPI/Warsh tomorrow or NFP-week setup pressure. If today has strongest USD news or other high-impact red-folder USD news, the bot ignores the post-holiday quiet rule and applies the normal news rule.
 
 ## 11. Reviewer Questions
 
@@ -206,5 +207,5 @@ These are the main questions worth asking a lecturer:
 - Should the day before CPI always block both NY AM and NY PM?
 - Should all no-major-news days be WHITE/cautious, or should some be GREEN by default?
 - Should 10:00 red-folder releases such as ISM/JOLTS have a named rule instead of relying only on the pressure overlay?
-- Should Powell/FOMC PM events block more or less of NY PM?
+- Should Warsh/FOMC PM events block more or less of NY PM?
 - Should partial holidays remain hard no-trade days even if other news is also on the calendar?

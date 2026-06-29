@@ -35,10 +35,10 @@ These are the values your `when:` block can reference. They are computed by `Cal
 | `has_bank_holiday_today` | bool | Full USD bank/market holiday today. Time-shift calendar markers are ignored. |
 | `had_bank_holiday_yesterday` | bool | Full USD bank/market holiday on the previous calendar day. Time-shift calendar markers are ignored. |
 | `has_partial_holiday_today` | bool | Early-close / half-day on the calendar today. |
-| `has_830_red_news` | bool | A high-impact USD release at the AM red-news time configured in `windows.am_red_news_at`, excluding CPI/PPI/Friday NFP/Federal Funds Rate/FOMC Statement/Powell strongest-category events. |
-| `has_powell_10am_today` | bool | A Fed Chair Powell speech at the time configured in `windows.powell_speech_at`. |
+| `has_830_red_news` | bool | A high-impact USD release at the AM red-news time configured in `windows.am_red_news_at`, excluding CPI/PPI/Friday NFP/Federal Funds Rate/FOMC Statement/Warsh strongest-category events. |
+| `has_powell_10am_today` | bool | A Fed Chair Warsh speech at the time configured in `windows.powell_speech_at`. |
 | `days_until_powell_10am` | int or null | Number of days until the next such speech. |
-| `has_pm_red_news` | bool | A high-impact PM USD Federal Funds Rate, FOMC Statement, or Powell release after `windows.pm_news_after_hour`. |
+| `has_pm_red_news` | bool | A high-impact PM USD Federal Funds Rate, FOMC Statement, or Warsh release after `windows.pm_news_after_hour`. |
 | `has_no_major_usd_news_today` | bool | True when neither strong nor other-red USD news is on the calendar. |
 | `categories_today` | list[str] | Categories detected on today's events (e.g. `["CPI", "RED_830AM"]`). |
 | `strong_usd_news_today` | list[str] | Pretty-printed strongest news strings for the morning post. |
@@ -49,7 +49,7 @@ Strongest-category features only use high-impact USD events. Alias excludes in `
 
 ## Rule precedence and overlays
 
-Rules match by priority, and explicit rules keep their configured session colors. The generic other-red-news pressure overlay only applies when the selected rule is `default_green_day`; explicit macro/session rules such as CPI, PPI, NFP, Powell, PM red news, and 8:30 red news are not downgraded after matching.
+Rules match by priority, and explicit rules keep their configured session colors. The generic other-red-news pressure overlay only applies when the selected rule is `default_green_day`; explicit macro/session rules such as CPI, PPI, NFP, Warsh, PM red news, and 8:30 red news are not downgraded after matching.
 
 CPI and PPI both have two lead-up rules:
 

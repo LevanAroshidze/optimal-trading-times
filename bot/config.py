@@ -501,7 +501,7 @@ def _load_windows_config(raw: StructuredValue | None) -> WindowsConfig:
             pre_release_pressure_minutes=180,
             pm_news_after_hour=14,
             am_red_news_at=time(8, 30),
-            powell_speech_at=time(10, 0),
+            powell_speech_at=time(9, 0),
         )
 
     mapping = _expect_mapping(raw, "windows")
@@ -533,7 +533,7 @@ def _load_windows_config(raw: StructuredValue | None) -> WindowsConfig:
         mapping.get("am_red_news_at", "08:30"), "windows.am_red_news_at"
     )
     powell = _coerce_time(
-        mapping.get("powell_speech_at", "10:00"), "windows.powell_speech_at"
+        mapping.get("powell_speech_at", "09:00"), "windows.powell_speech_at"
     )
 
     return WindowsConfig(

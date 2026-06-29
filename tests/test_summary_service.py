@@ -23,7 +23,7 @@ def make_service() -> DailySummaryService:
             "NFP": ["non-farm employment change"],
             "CPI": ["cpi"],
             "PPI": ["ppi"],
-            "POWELL": ["fed chair powell speaks"],
+            "POWELL": ["fed chairman warsh speaks"],
             "FOMC": ["federal funds rate", "fomc statement"],
             "RED_830AM": ["retail sales", "unemployment claims"],
         },
@@ -207,8 +207,8 @@ def test_summary_service_applies_post_bank_holiday_quiet_rule():
         (
             date(2026, 4, 14),
             "2026-04-13T08:30:00-04:00",
-            "Fed Chair Powell Speaks",
-            "2026-04-14T10:00:00-04:00",
+            "Fed Chairman Warsh Speaks",
+            "2026-04-14T09:00:00-04:00",
             "powell_10am_today",
         ),
         (
