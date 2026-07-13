@@ -112,6 +112,7 @@ class CalendarFeatureBuilder:
             {
                 category
                 for match in today_events
+                if self._is_strong_usd_event(match)
                 for category in self._effective_categories(match)
             }
         )

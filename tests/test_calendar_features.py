@@ -3,8 +3,9 @@ from datetime import date, datetime
 
 from bot.calendar_features import CalendarFeatureBuilder
 from bot.calendar_source import ForexFactoryCalendarSource
+from bot.config import load_app_config, load_event_aliases
 from bot.models import CalendarEvent, DayColor
-from tests.conftest import make_aliases, make_windows
+from tests.conftest import CONFIG_DIR, make_aliases, make_windows
 
 
 def _builder(aliases=None) -> CalendarFeatureBuilder:
@@ -20,7 +21,7 @@ def test_calendar_feature_builder_detects_nfp_and_warsh_offset():
         title_aliases={
             "NFP": ["non-farm employment change"],
             "CPI": ["cpi"],
-            "POWELL": ["fed chairman warsh speaks"],
+            "POWELL": ["fed chairman warsh testifies"],
             "RED_830AM": ["unemployment claims"],
         }
     )
@@ -34,10 +35,10 @@ def test_calendar_feature_builder_detects_nfp_and_warsh_offset():
             starts_at=datetime.fromisoformat("2026-04-03T08:30:00-04:00"),
         ),
         CalendarEvent(
-            title="Fed Chairman Warsh Speaks",
+            title="Fed Chairman Warsh Testifies",
             country="USD",
             impact="High",
-            starts_at=datetime.fromisoformat("2026-04-02T09:00:00-04:00"),
+            starts_at=datetime.fromisoformat("2026-04-02T10:00:00-04:00"),
         ),
     ]
 
@@ -46,6 +47,30 @@ def test_calendar_feature_builder_detects_nfp_and_warsh_offset():
 
     assert nfp_features["week_type"] == "NFP"
     assert warsh_previous_day_features["days_until_powell_10am"] == 1
+
+
+def test_production_aliases_classify_july_14_warsh_testimony_at_10am():
+    app_config = load_app_config(CONFIG_DIR / "app.yaml")
+    builder = CalendarFeatureBuilder(
+        aliases=load_event_aliases(CONFIG_DIR / "event_aliases.yaml"),
+        market_timezone=app_config.calendar.market_timezone,
+        windows=app_config.windows,
+    )
+
+    analysis = builder.analyse_date(
+        date(2026, 7, 14),
+        [
+            CalendarEvent(
+                title="Fed Chairman Warsh Testifies",
+                country="USD",
+                impact="High",
+                starts_at=datetime.fromisoformat("2026-07-14T10:00:00-04:00"),
+            )
+        ],
+    )
+
+    assert analysis.features["has_powell_10am_today"] is True
+    assert analysis.strongest_news_today == ["Warsh speech at 10:00 AM NY time"]
 
 
 def test_calendar_feature_builder_does_not_treat_adp_as_nfp():
@@ -71,6 +96,33 @@ def test_calendar_feature_builder_does_not_treat_adp_as_nfp():
     assert analysis.other_red_news_today == [
         "ADP Non-Farm Employment Change at 8:15 AM NY time"
     ]
+
+
+def test_categories_today_excludes_foreign_and_non_high_impact_aliases():
+    aliases = make_aliases(
+        title_aliases={"CPI": ["cpi"], "PPI": ["ppi"]}
+    )
+    builder = _builder(aliases)
+
+    analysis = builder.analyse_date(
+        date(2026, 7, 14),
+        [
+            CalendarEvent(
+                title="PPI m/m",
+                country="CHF",
+                impact="High",
+                starts_at=datetime.fromisoformat("2026-07-14T07:30:00-04:00"),
+            ),
+            CalendarEvent(
+                title="CPI m/m",
+                country="USD",
+                impact="Medium",
+                starts_at=datetime.fromisoformat("2026-07-14T08:30:00-04:00"),
+            ),
+        ],
+    )
+
+    assert analysis.features["categories_today"] == []
 
 
 def test_calendar_feature_builder_still_treats_official_release_as_nfp():

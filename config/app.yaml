@@ -1,6 +1,9 @@
 delivery:
   webhook_url_env: DISCORD_WEBHOOK_URL
   ops_webhook_url_env: DISCORD_OPS_WEBHOOK_URL
+  timeout_seconds: 10
+  max_retries: 3
+  retry_backoff_seconds: 1.0
 
 runtime:
   state_path: data/state.json
@@ -34,7 +37,7 @@ windows:
   pre_release_pressure_minutes: 180
   pm_news_after_hour: 14
   am_red_news_at: "08:30"
-  powell_speech_at: "09:00"
+  powell_speech_at: "10:00"
   session_windows:
     London:
       start: "03:00"

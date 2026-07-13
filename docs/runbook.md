@@ -15,6 +15,8 @@ Check Railway (or wherever the cron runs) for the run that should have fired. Th
 | `daily_skipped reason=weekend_skip` | `policy.post_on_weekend: false` and today is Sat/Sun. |
 | `calendar_unavailable consecutive_failures=N` | Calendar fetch failed; the next run will try again. |
 | `calendar_fetch_skipped reason=source_retry_after` | Forex Factory asked the bot to wait; cached data is used if available. |
+| `calendar_events_rejected reason=target_week_missing` | The loaded live/cache events do not cover the requested New York market week, so the fail-safe plan is used. |
+| `cached_calendar_rejected reason=fetched_at_in_future` | The cache timestamp is beyond the allowed clock-skew tolerance and is not trusted. |
 | `weekly_skipped reason=retry_after` | The weekly target week was missing recently; the bot waits for the hourly FF export refresh before retrying. |
 | `dry_run_message kind=daily ...` | The process was invoked with `--dry-run`; nothing was sent. |
 
@@ -30,6 +32,10 @@ Discord can occasionally accept a webhook but the process can crash before final
 - Set `runtime.lock_path` so two overlapping crons cannot both believe the post is due.
 - Watch logs for `post_skipped reason=pending_confirmation`, then check Discord and `data/state.json` before forcing a repost.
 
+Webhook requests use Discord's confirmation response (`wait=true`). Connect/read/write/pool failures and `5xx` responses are retried up to the configured delivery limit. A response timeout remains inherently ambiguous: Discord may have accepted the message before the response was lost. If all attempts fail, the cron exits non-zero and leaves the pending marker in place. Check the channel before manually clearing or forcing that marker.
+
+Discord `429` delays up to 60 seconds are honored. Longer delays fail immediately and retain the pending marker rather than sleeping while the Railway lock is held. Retry the cron after Discord's requested window.
+
 ## "How do I reset state?"
 
 Stop the cron, delete `data/state.json`, and let the next scheduled run recreate it. The bot tolerates missing state but enforces the late-post window described above.
@@ -40,7 +46,7 @@ The bot will:
 
 1. Retry each URL up to `calendar.max_retries` times with backoff.
 2. If at least one URL succeeds, partial results are used.
-3. If every URL fails, fresh cached events are used and the post is marked as cached.
+3. If every URL fails, fresh cached events are used only when they cover the requested market week, and the post is marked as cached.
 4. If every URL fails and no fresh cache exists, it posts the "Red day. Calendar unavailable." plan and increments `state.operations.consecutive_source_failures`.
 
 Forex Factory's calendar export is updated hourly and can rate-limit repeated export requests. When the response includes a long retry window, the bot stores it in state and skips source fetches until that time. Monitor `consecutive_source_failures` via logs. If `DISCORD_OPS_WEBHOOK_URL` is configured, the bot sends a deduped ops alert when failures cross `policy.max_consecutive_source_failures`.
@@ -55,7 +61,7 @@ The Sunday weekly outlook first tries the configured JSON feed. If that feed doe
 python -m bot --dry-run --target-date 2026-05-08 --force-kind daily
 ```
 
-This builds the message in memory, prints it to stdout, and does not touch the webhook or `state.json`. Use `python3 -m bot ...` if your shell does not have a `python` command.
+This builds the message in memory, prints it to stdout, and does not touch the webhook or `state.json`. Preview sending cannot be combined with `--dry-run` or `--diagnose-week`. Use `python3 -m bot ...` if your shell does not have a `python` command.
 
 For a full rule/feature diagnostic view of a week:
 

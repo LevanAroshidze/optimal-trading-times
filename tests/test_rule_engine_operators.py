@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from datetime import date
 
-from bot.config import load_rules
+import pytest
+
+from bot.config import ConfigError, load_rules
 from bot.rule_engine import RuleEngine
 
 
@@ -106,3 +108,81 @@ def test_all_of_operator(tmp_path):
     engine = RuleEngine(load_rules(_write_rules(tmp_path, body)))
     assert engine.match(date(2026, 1, 1), {"days_before_cpi": 2}).rule_id == "all_of_rule"
     assert engine.match(date(2026, 1, 1), {"days_before_cpi": 5}).rule_id == "fallback"
+
+
+def test_grouped_operator_does_not_ignore_sibling_constraint(tmp_path):
+    body = (
+        _full_rule(
+            "conjunctive_rule",
+            (
+                "days_before_cpi:\n"
+                "      any_of:\n"
+                "        - equals: 0\n"
+                "        - equals: 7\n"
+                "      gt: 1"
+            ),
+        )
+        + _FALLBACK
+    )
+    engine = RuleEngine(load_rules(_write_rules(tmp_path, body)))
+
+    assert engine.match(date(2026, 1, 1), {"days_before_cpi": 0}).rule_id == "fallback"
+    assert (
+        engine.match(date(2026, 1, 1), {"days_before_cpi": 7}).rule_id
+        == "conjunctive_rule"
+    )
+
+
+@pytest.mark.parametrize(
+    "condition_yaml",
+    [
+        "days_before_cpi:\n      equals: null",
+        "days_before_cpi:\n      in: [null, 1]",
+        (
+            "days_before_cpi:\n"
+            "      any_of:\n"
+            "        - equals: null\n"
+            "        - equals: 1"
+        ),
+        (
+            "days_before_cpi:\n"
+            "      all_of:\n"
+            "        - not_equals: 1\n"
+            "        - not_equals: 2"
+        ),
+    ],
+)
+def test_positive_operator_constraints_do_not_match_missing_feature(
+    tmp_path, condition_yaml
+):
+    body = _full_rule("missing_feature_rule", condition_yaml) + _FALLBACK
+    engine = RuleEngine(load_rules(_write_rules(tmp_path, body)))
+
+    assert engine.match(date(2026, 1, 1), {}).rule_id == "fallback"
+
+
+@pytest.mark.parametrize(
+    ("condition_yaml", "feature_key"),
+    [
+        ("days_before_cpi:\n      not_equals: 1", "days_before_cpi"),
+        ("categories_today:\n      not_contains: CPI", "categories_today"),
+    ],
+)
+def test_standalone_negative_operator_can_match_missing_feature(
+    tmp_path, condition_yaml, feature_key
+):
+    body = _full_rule("negative_rule", condition_yaml) + _FALLBACK
+    engine = RuleEngine(load_rules(_write_rules(tmp_path, body)))
+
+    assert engine.match(date(2026, 1, 1), {feature_key: None}).rule_id == "negative_rule"
+
+
+@pytest.mark.parametrize("operator", ["any_of", "all_of"])
+def test_grouped_operator_rejects_empty_members(tmp_path, operator):
+    body = (
+        _full_rule("empty_group", f"days_before_cpi:\n      {operator}: []")
+        + _FALLBACK
+    )
+
+    with pytest.raises(ConfigError, match="must not be empty"):
+        load_rules(_write_rules(tmp_path, body))

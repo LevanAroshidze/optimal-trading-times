@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
@@ -19,6 +20,11 @@ logger = logging.getLogger(__name__)
 _HTTP_TOO_MANY_REQUESTS = 429
 _HTTP_SERVER_ERROR_MIN = 500
 _MAX_RETRY_AFTER_SECONDS = 30.0
+_MAX_PERSISTED_RETRY_AFTER_SECONDS = 86_400.0
+_MAX_TIMEOUT_SECONDS = 60.0
+_MAX_RETRIES = 5
+_MAX_BACKOFF_SECONDS = 10.0
+_EXPORT_RATE_LIMIT_TEXT = "exceeded the limit for calendar export requests"
 
 
 class CalendarSourceError(RuntimeError):
@@ -50,11 +56,28 @@ class ForexFactoryCalendarSource:
         max_retries: int = 3,
         retry_backoff_seconds: float = 1.0,
     ) -> None:
+        if (
+            not math.isfinite(timeout_seconds)
+            or not 0 < timeout_seconds <= _MAX_TIMEOUT_SECONDS
+        ):
+            raise ValueError("timeout_seconds must be finite and between 0 and 60")
+        if (
+            isinstance(max_retries, bool)
+            or not 1 <= max_retries <= _MAX_RETRIES
+        ):
+            raise ValueError("max_retries must be between 1 and 5")
+        if (
+            not math.isfinite(retry_backoff_seconds)
+            or not 0 <= retry_backoff_seconds <= _MAX_BACKOFF_SECONDS
+        ):
+            raise ValueError(
+                "retry_backoff_seconds must be finite and between 0 and 10"
+            )
         self.urls = list(urls)
         self.timeout_seconds = timeout_seconds
         self.user_agent = user_agent
-        self.max_retries = max(1, max_retries)
-        self.retry_backoff_seconds = max(0.0, retry_backoff_seconds)
+        self.max_retries = max_retries
+        self.retry_backoff_seconds = retry_backoff_seconds
         self._last_results: list[FetchResult] = []
 
     @property
@@ -67,7 +90,9 @@ class ForexFactoryCalendarSource:
 
         timeout = httpx.Timeout(self.timeout_seconds)
         headers = {"User-Agent": self.user_agent, "Accept": "application/json"}
-        async with httpx.AsyncClient(timeout=timeout, headers=headers) as client:
+        async with httpx.AsyncClient(
+            timeout=timeout, headers=headers, follow_redirects=True
+        ) as client:
             results = await self._fetch_results(client)
         self._last_results = list(results)
 
@@ -92,9 +117,13 @@ class ForexFactoryCalendarSource:
         timeout = httpx.Timeout(self.timeout_seconds)
         page_headers = {"User-Agent": self.user_agent, "Accept": "text/html"}
         json_headers = {"User-Agent": self.user_agent, "Accept": "application/json"}
-        async with httpx.AsyncClient(timeout=timeout, headers=page_headers) as client:
+        async with httpx.AsyncClient(
+            timeout=timeout, headers=page_headers, follow_redirects=True
+        ) as client:
             export_url = await self._fetch_week_export_url(client, page_url)
-        async with httpx.AsyncClient(timeout=timeout, headers=json_headers) as client:
+        async with httpx.AsyncClient(
+            timeout=timeout, headers=json_headers, follow_redirects=True
+        ) as client:
             result = await self._fetch_with_retries(client, export_url)
         self._last_results = [result]
 
@@ -157,13 +186,25 @@ class ForexFactoryCalendarSource:
                     continue
 
                 unique_key = (
-                    event.title,
-                    event.country,
-                    event.starts_at.isoformat(),
+                    event.title.casefold(),
+                    event.country.upper(),
+                    event.starts_at.astimezone(UTC).isoformat(),
                 )
-                events[unique_key] = event
+                existing = events.get(unique_key)
+                if (
+                    existing is None
+                    or self._impact_rank(event.impact)
+                    > self._impact_rank(existing.impact)
+                ):
+                    events[unique_key] = event
 
         return events, skipped_items
+
+    @staticmethod
+    def _impact_rank(impact: str) -> int:
+        return {"holiday": 4, "high": 3, "medium": 2, "low": 1}.get(
+            impact.casefold(), 0
+        )
 
     def _event_from_item(
         self, item: Mapping[str, StructuredValue]
@@ -269,22 +310,29 @@ class ForexFactoryCalendarSource:
                 try:
                     payload = response.json()
                 except ValueError:
-                    return FetchResult(
-                        url=url, payload=None, error="invalid_json"
-                    )
-                retry_after = self._retry_after_from_payload(payload)
-                if retry_after is not None:
-                    return FetchResult(
-                        url=url,
-                        payload=None,
-                        error=f"rate_limited retry_after={retry_after:g}s",
-                        retry_after_seconds=retry_after,
-                    )
-                try:
-                    coerced = self._coerce_payload(payload, url)
-                except CalendarSourceError as error:
-                    return FetchResult(url=url, payload=None, error=str(error))
-                return FetchResult(url=url, payload=coerced, error=None)
+                    last_error = "invalid_json"
+                else:
+                    retry_after = self._retry_after_from_payload(payload)
+                    if retry_after is not None:
+                        last_error = f"rate_limited retry_after={retry_after:g}s"
+                        if retry_after > _MAX_RETRY_AFTER_SECONDS:
+                            return FetchResult(
+                                url=url,
+                                payload=None,
+                                error=last_error,
+                                retry_after_seconds=retry_after,
+                            )
+                        if attempt < self.max_retries:
+                            await self._sleep_before_retry(attempt, retry_after)
+                        continue
+                    try:
+                        coerced = self._coerce_payload(payload, url)
+                    except CalendarSourceError as error:
+                        last_error = str(error)
+                    else:
+                        if coerced:
+                            return FetchResult(url=url, payload=coerced, error=None)
+                        last_error = "empty_payload"
 
             if attempt < self.max_retries and self.retry_backoff_seconds:
                 await self._sleep_before_retry(attempt)
@@ -296,7 +344,10 @@ class ForexFactoryCalendarSource:
     ) -> None:
         delay = retry_after
         if delay is None:
-            delay = self.retry_backoff_seconds * attempt
+            delay = min(
+                self.retry_backoff_seconds * (2 ** (attempt - 1)),
+                _MAX_BACKOFF_SECONDS,
+            )
         if delay > 0:
             await asyncio.sleep(delay)
 
@@ -304,38 +355,49 @@ class ForexFactoryCalendarSource:
         header = response.headers.get("Retry-After")
         if header:
             try:
-                return max(0.0, float(header))
+                retry_after = self._valid_retry_after(float(header))
             except ValueError:
                 try:
                     retry_at = parsedate_to_datetime(header)
                 except (TypeError, ValueError):
-                    return None
-                if retry_at.tzinfo is None:
-                    retry_at = retry_at.replace(tzinfo=UTC)
-                return max(
-                    0.0,
-                    (retry_at.astimezone(UTC) - datetime.now(tz=UTC)).total_seconds(),
-                )
+                    retry_after = None
+                else:
+                    if retry_at.tzinfo is None:
+                        retry_at = retry_at.replace(tzinfo=UTC)
+                    retry_after = self._valid_retry_after(
+                        (
+                            retry_at.astimezone(UTC) - datetime.now(tz=UTC)
+                        ).total_seconds()
+                    )
+            if retry_after is not None:
+                return retry_after
         try:
             data = response.json()
         except ValueError:
             return None
         retry_after = data.get("retry_after") if isinstance(data, dict) else None
-        if isinstance(retry_after, (int, float)):
-            return max(0.0, float(retry_after))
+        if isinstance(retry_after, (int, float)) and not isinstance(
+            retry_after, bool
+        ):
+            return self._valid_retry_after(float(retry_after))
         return None
 
     def _retry_after_from_payload(self, payload: StructuredValue) -> float | None:
         retry_after = payload.get("retry_after") if isinstance(payload, dict) else None
-        if isinstance(retry_after, (int, float)):
-            return max(0.0, float(retry_after))
+        if isinstance(retry_after, (int, float)) and not isinstance(
+            retry_after, bool
+        ):
+            return self._valid_retry_after(float(retry_after))
         return None
 
+    @staticmethod
+    def _valid_retry_after(value: float) -> float | None:
+        if not math.isfinite(value):
+            return None
+        return min(max(0.0, value), _MAX_PERSISTED_RETRY_AFTER_SECONDS)
+
     def _looks_rate_limited(self, response: httpx.Response) -> bool:
-        content_type = response.headers.get("content-type", "")
-        if "json" in content_type.casefold():
-            return False
-        return "exceeded the limit for Calendar Export requests" in response.text
+        return _EXPORT_RATE_LIMIT_TEXT in response.text.casefold()
 
     def _coerce_payload(
         self, payload: StructuredValue, url: str
@@ -355,35 +417,50 @@ class ForexFactoryCalendarSource:
     async def _fetch_week_export_url(
         self, client: httpx.AsyncClient, page_url: str
     ) -> str:
-        try:
-            response = await client.get(page_url)
-            response.raise_for_status()
-        except httpx.HTTPStatusError as error:
-            retry_after = None
-            if error.response.status_code == _HTTP_TOO_MANY_REQUESTS:
-                retry_after = self._parse_retry_after(error.response)
-            raise CalendarSourceError(
-                f"Weekly calendar page failed with HTTP {error.response.status_code}: {page_url}",
-                retry_after_seconds=retry_after,
-            ) from error
-        except httpx.HTTPError as error:
-            raise CalendarSourceError(
-                f"Weekly calendar page failed with {error.__class__.__name__}: {page_url}"
-            ) from error
-
-        parser = _WeeklyExportParser(page_url)
-        parser.feed(response.text)
-        export_url = parser.json_export_url
-        if export_url is None:
-            if "exceeded the limit for Calendar Export requests" in response.text:
-                raise CalendarSourceError(
-                    "Weekly calendar export was rate limited.",
-                    retry_after_seconds=300.0,
+        last_error: CalendarSourceError | None = None
+        for attempt in range(1, self.max_retries + 1):
+            retry_after: float | None = None
+            try:
+                response = await client.get(page_url)
+                response.raise_for_status()
+            except httpx.HTTPStatusError as error:
+                status = error.response.status_code
+                if status == _HTTP_TOO_MANY_REQUESTS:
+                    retry_after = self._parse_retry_after(error.response)
+                last_error = CalendarSourceError(
+                    f"Weekly calendar page failed with HTTP {status}: {page_url}",
+                    retry_after_seconds=retry_after,
                 )
-            raise CalendarSourceError(
-                f"Weekly calendar page did not include a JSON export link: {page_url}"
-            )
-        return export_url
+                retryable = status == _HTTP_TOO_MANY_REQUESTS or status >= 500
+                if not retryable:
+                    raise last_error from error
+                if retry_after is not None and retry_after > _MAX_RETRY_AFTER_SECONDS:
+                    raise last_error from error
+            except httpx.HTTPError as error:
+                last_error = CalendarSourceError(
+                    "Weekly calendar page failed with "
+                    f"{error.__class__.__name__}: {page_url}"
+                )
+            else:
+                parser = _WeeklyExportParser(page_url)
+                parser.feed(response.text)
+                if parser.json_export_url is not None:
+                    return parser.json_export_url
+                if _EXPORT_RATE_LIMIT_TEXT in response.text.casefold():
+                    raise CalendarSourceError(
+                        "Weekly calendar export was rate limited.",
+                        retry_after_seconds=300.0,
+                    )
+                last_error = CalendarSourceError(
+                    "Weekly calendar page did not include a JSON export link: "
+                    f"{page_url}"
+                )
+
+            if attempt < self.max_retries:
+                await self._sleep_before_retry(attempt, retry_after)
+
+        assert last_error is not None
+        raise last_error
 
     def _week_token(self, week_start: date) -> str:
         return f"{week_start.strftime('%b').casefold()}{week_start.day}.{week_start.year}"

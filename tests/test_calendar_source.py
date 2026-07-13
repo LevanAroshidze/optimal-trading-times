@@ -23,6 +23,22 @@ VALID_PAYLOAD = [
     }
 ]
 
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"timeout_seconds": float("nan")},
+        {"timeout_seconds": float("inf")},
+        {"max_retries": 0},
+        {"retry_backoff_seconds": float("nan")},
+        {"retry_backoff_seconds": float("inf")},
+    ],
+)
+def test_calendar_source_rejects_invalid_retry_configuration(kwargs):
+    with pytest.raises(ValueError):
+        ForexFactoryCalendarSource(["https://example.com/a"], **kwargs)
+
+
 def test_partial_failure_uses_successful_url():
     """If one URL fails and another succeeds, surviving events are returned."""
 
@@ -107,6 +123,66 @@ def test_retries_on_5xx_then_succeeds():
 
     result = asyncio.run(run())
     assert result.succeeded
+    assert counter["calls"] == 2
+
+
+def test_calendar_retries_use_exponential_backoff(monkeypatch):
+    counter = {"calls": 0}
+    delays: list[float] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        counter["calls"] += 1
+        if counter["calls"] <= 3:
+            return httpx.Response(503)
+        return httpx.Response(200, json=VALID_PAYLOAD)
+
+    async def record_sleep(delay: float) -> None:
+        delays.append(delay)
+
+    monkeypatch.setattr("bot.calendar_source.asyncio.sleep", record_sleep)
+    source = ForexFactoryCalendarSource(
+        ["https://example.com/a"], max_retries=4, retry_backoff_seconds=1
+    )
+
+    async def run():
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(handler)
+        ) as client:
+            return await source._fetch_with_retries(client, source.urls[0])
+
+    result = asyncio.run(run())
+
+    assert result.succeeded
+    assert delays == [1, 2, 4]
+
+
+@pytest.mark.parametrize(
+    ("first_response", "first_error"),
+    [
+        (httpx.Response(200, text="not-json"), "invalid_json"),
+        (httpx.Response(200, json=[]), "empty_payload"),
+    ],
+)
+def test_retries_malformed_or_empty_success_response(first_response, first_error):
+    counter = {"calls": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        counter["calls"] += 1
+        if counter["calls"] == 1:
+            return first_response
+        return httpx.Response(200, json=VALID_PAYLOAD)
+
+    source = ForexFactoryCalendarSource(
+        ["https://example.com/a"], max_retries=2, retry_backoff_seconds=0
+    )
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            return await source._fetch_with_retries(client, source.urls[0])
+
+    result = asyncio.run(run())
+
+    assert result.succeeded, first_error
     assert counter["calls"] == 2
 
 
@@ -213,6 +289,32 @@ def test_429_with_http_date_retry_after_does_not_retry_immediately():
     assert counter["calls"] == 1
 
 
+def test_retry_after_rejects_nonfinite_and_caps_extreme_value():
+    source = ForexFactoryCalendarSource(["https://example.com/a"])
+
+    assert source._parse_retry_after(httpx.Response(429, headers={"Retry-After": "inf"})) is None
+    assert (
+        source._parse_retry_after(httpx.Response(429, headers={"Retry-After": "999999999"}))
+        == 86_400
+    )
+    assert source._retry_after_from_payload({"retry_after": float("nan")}) is None
+
+
+def test_retry_after_falls_back_to_json_when_header_is_invalid():
+    source = ForexFactoryCalendarSource(["https://example.com/a"])
+
+    assert (
+        source._parse_retry_after(
+            httpx.Response(
+                429,
+                headers={"Retry-After": "invalid"},
+                json={"retry_after": 12.5},
+            )
+        )
+        == 12.5
+    )
+
+
 def test_html_rate_limit_response_sets_retry_after():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
@@ -235,6 +337,30 @@ def test_html_rate_limit_response_sets_retry_after():
 
     result = asyncio.run(run())
     assert not result.succeeded
+    assert result.error == "rate_limited retry_after=300s"
+    assert result.retry_after_seconds == 300
+
+
+def test_rate_limit_body_is_detected_despite_misleading_content_type():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "application/json"},
+            text="YOU'VE EXCEEDED THE LIMIT FOR CALENDAR EXPORT REQUESTS.",
+        )
+
+    source = ForexFactoryCalendarSource(
+        ["https://example.com/a"], max_retries=1
+    )
+
+    async def run():
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(handler)
+        ) as client:
+            return await source._fetch_with_retries(client, source.urls[0])
+
+    result = asyncio.run(run())
+
     assert result.error == "rate_limited retry_after=300s"
     assert result.retry_after_seconds == 300
 
@@ -269,6 +395,48 @@ def test_event_parser_deduplicates_events_across_successful_urls():
     )
 
     assert len(events) == 1
+    assert skipped == 0
+
+
+def test_event_deduplication_keeps_more_conservative_impact():
+    source = ForexFactoryCalendarSource(
+        ["https://example.com/a", "https://example.com/b"]
+    )
+    low_impact_duplicate = dict(VALID_PAYLOAD[0], impact="Low", title="cpi M/M")
+
+    events, skipped = source._events_from_results(
+        [
+            FetchResult(url="https://example.com/a", payload=VALID_PAYLOAD),
+            FetchResult(
+                url="https://example.com/b", payload=[low_impact_duplicate]
+            ),
+        ]
+    )
+
+    assert len(events) == 1
+    assert next(iter(events.values())).impact == "High"
+    assert skipped == 0
+
+
+def test_event_deduplication_treats_holiday_as_more_conservative_than_high():
+    source = ForexFactoryCalendarSource(
+        ["https://example.com/a", "https://example.com/b"]
+    )
+    holiday_duplicate = dict(
+        VALID_PAYLOAD[0], impact="Holiday", title="cpi M/M"
+    )
+
+    events, skipped = source._events_from_results(
+        [
+            FetchResult(url="https://example.com/a", payload=VALID_PAYLOAD),
+            FetchResult(
+                url="https://example.com/b", payload=[holiday_duplicate]
+            ),
+        ]
+    )
+
+    assert len(events) == 1
+    assert next(iter(events.values())).impact == "Holiday"
     assert skipped == 0
 
 
@@ -321,10 +489,61 @@ def test_weekly_export_parser_finds_json_export_link():
     parser = _WeeklyExportParser("https://www.forexfactory.com/calendar?week=may4.2026")
 
     parser.feed(
-        '<a href="https://nfs.faireconomy.media/ff_calendar_thisweek.json?version=abc">'
-        "JSON</a>"
+        '<a href="https://nfs.faireconomy.media/ff_calendar_thisweek.json?version=abc">JSON</a>'
     )
 
     assert parser.json_export_url == (
         "https://nfs.faireconomy.media/ff_calendar_thisweek.json?version=abc"
     )
+
+
+def test_weekly_calendar_page_retries_transient_failure():
+    counter = {"calls": 0}
+    page_url = "https://www.forexfactory.com/calendar?week=may4.2026"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        counter["calls"] += 1
+        if counter["calls"] == 1:
+            return httpx.Response(503)
+        return httpx.Response(
+            200,
+            text=(
+                '<a href="https://nfs.faireconomy.media/'
+                'ff_calendar_thisweek.json?version=abc">JSON</a>'
+            ),
+        )
+
+    source = ForexFactoryCalendarSource(
+        ["https://example.com/a"], max_retries=2, retry_backoff_seconds=0
+    )
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            return await source._fetch_week_export_url(client, page_url)
+
+    export_url = asyncio.run(run())
+
+    assert export_url.endswith("ff_calendar_thisweek.json?version=abc")
+    assert counter["calls"] == 2
+
+
+def test_weekly_calendar_page_does_not_retry_permanent_4xx():
+    counter = {"calls": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        counter["calls"] += 1
+        return httpx.Response(404)
+
+    source = ForexFactoryCalendarSource(
+        ["https://example.com/a"], max_retries=3, retry_backoff_seconds=0
+    )
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            await source._fetch_week_export_url(
+                client, "https://www.forexfactory.com/calendar?week=may4.2026"
+            )
+
+    with pytest.raises(CalendarSourceError, match="HTTP 404"):
+        asyncio.run(run())
+    assert counter["calls"] == 1

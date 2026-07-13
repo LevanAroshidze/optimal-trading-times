@@ -5,9 +5,10 @@ import asyncio
 import logging
 import os
 import sys
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import get_args
+from urllib.parse import urlsplit
 
 from bot.calendar_features import CalendarFeatureBuilder
 from bot.calendar_source import CalendarSourceError, ForexFactoryCalendarSource
@@ -86,7 +87,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Allow preview posts when preview webhook matches DISCORD_WEBHOOK_URL.",
     )
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.preview_message_styles and args.dry_run:
+        parser.error("--dry-run cannot be combined with --preview-message-styles")
+    if args.preview_message_styles and args.diagnose_week:
+        parser.error("--diagnose-week cannot be combined with --preview-message-styles")
+    return args
 
 
 def _parse_iso_date(value: str) -> date:
@@ -96,6 +102,10 @@ def _parse_iso_date(value: str) -> date:
         raise argparse.ArgumentTypeError(
             f"--target-date must be ISO YYYY-MM-DD, got {value!r}"
         ) from error
+
+
+def _webhook_identity(url: str) -> str:
+    return urlsplit(url.strip()).path.rstrip("/")
 
 
 def _configure_logging(level: str) -> None:
@@ -196,7 +206,9 @@ def _build_components(
         )
         sender = DiscordWebhookSender(
             webhook_url=webhook_url,
-            timeout_seconds=app_config.calendar.timeout_seconds,
+            timeout_seconds=app_config.delivery.timeout_seconds,
+            max_retries=app_config.delivery.max_retries,
+            retry_backoff_seconds=app_config.delivery.retry_backoff_seconds,
         )
         if app_config.delivery.ops_webhook_url_env:
             ops_webhook_raw = os.getenv(app_config.delivery.ops_webhook_url_env, "")
@@ -205,7 +217,9 @@ def _build_components(
                     webhook_url=validate_webhook_url(
                         ops_webhook_raw, app_config.delivery.ops_webhook_url_env
                     ),
-                    timeout_seconds=app_config.calendar.timeout_seconds,
+                    timeout_seconds=app_config.delivery.timeout_seconds,
+                    max_retries=app_config.delivery.max_retries,
+                    retry_backoff_seconds=app_config.delivery.retry_backoff_seconds,
                 )
 
     return summary_service, formatter, sender, ops_sender, state_store
@@ -269,7 +283,7 @@ async def _send_message_style_previews(args: argparse.Namespace) -> None:
     production_url = os.getenv("DISCORD_WEBHOOK_URL", "").strip()
     if (
         production_url
-        and preview_url == production_url
+        and _webhook_identity(preview_url) == _webhook_identity(production_url)
         and not args.allow_prod_preview
     ):
         raise WebhookError(
@@ -289,15 +303,30 @@ async def _send_message_style_previews(args: argparse.Namespace) -> None:
 async def _print_week_diagnostics(
     summary_service: DailySummaryService, target_date: date | None
 ) -> None:
-    target = target_date or date.today()
+    target = target_date or datetime.now(tz=summary_service.market_tz).date()
     week_start = target - timedelta(days=target.weekday())
+    errors: list[str] = []
     try:
         events = await summary_service.load_events()
-        source_status: SourceStatus = "live"
     except CalendarSourceError as error:
         events = []
-        source_status = "unavailable"
-        sys.stdout.write(f"source_status={source_status} error={error}\n")
+        errors.append(str(error))
+
+    if summary_service.build_weekly_outlook(week_start, events, "live") is None:
+        try:
+            events = await summary_service.load_events_for_week(week_start)
+        except CalendarSourceError as error:
+            events = []
+            errors.append(str(error))
+
+    source_status: SourceStatus = (
+        "live"
+        if summary_service.build_weekly_outlook(week_start, events, "live") is not None
+        else "unavailable"
+    )
+    if source_status == "unavailable":
+        joined_errors = "; ".join(errors) or "target week is not covered"
+        sys.stdout.write(f"source_status={source_status} error={joined_errors}\n")
 
     for offset in range(5):
         day = week_start + timedelta(days=offset)

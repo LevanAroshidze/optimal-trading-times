@@ -40,7 +40,7 @@ These are the values your `when:` block can reference. They are computed by `Cal
 | `days_until_powell_10am` | int or null | Number of days until the next such speech. |
 | `has_pm_red_news` | bool | A high-impact PM USD Federal Funds Rate, FOMC Statement, or Warsh release after `windows.pm_news_after_hour`. |
 | `has_no_major_usd_news_today` | bool | True when neither strong nor other-red USD news is on the calendar. |
-| `categories_today` | list[str] | Categories detected on today's events (e.g. `["CPI", "RED_830AM"]`). |
+| `categories_today` | list[str] | Categories detected on today's high-impact USD events (e.g. `["CPI", "RED_830AM"]`). |
 | `strong_usd_news_today` | list[str] | Pretty-printed strongest news strings for the morning post. |
 | `strong_usd_news_tomorrow` | list[str] | Same, but for tomorrow. |
 | `other_red_usd_news_today` | list[str] | Other red-folder USD events today. |
@@ -106,4 +106,4 @@ If two rules share a priority and overlapping `when:` keys, `find_rule_priority_
 - Forgetting `session_colors` for a session: load fails with a clear error.
 - Misspelling a feature key: load fails with a clear error and lists the known keys.
 - Missing fallback rule (empty `when`): load fails.
-- Using `equals: false` and expecting it to match feature absence: it won't, because `actual is None` short-circuits in operator evaluation. Use `not_equals: true` if you need that behavior.
+- Positive operator constraints (`equals`, `contains`, `in`, numeric comparisons, and grouped constraints) never match a missing or `null` feature, even when `null` appears explicitly in the condition. Standalone `not_equals` and `not_contains` remain the intentional exceptions; use `not_equals: true` when feature absence should match.

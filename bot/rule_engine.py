@@ -53,37 +53,42 @@ class RuleEngine:
             sub_conditions = expected["any_of"]
             if not isinstance(sub_conditions, list):
                 raise ValueError("'any_of' must be a list of operator maps")
-            return any(
+            if not any(
                 self._matches_operator(sub, actual) for sub in sub_conditions
-            )
+            ):
+                return False
         if "all_of" in expected:
             sub_conditions = expected["all_of"]
             if not isinstance(sub_conditions, list):
                 raise ValueError("'all_of' must be a list of operator maps")
-            return all(
+            if not all(
                 self._matches_operator(sub, actual) for sub in sub_conditions
-            )
-
-        if "equals" in expected:
-            return actual == expected["equals"]
+            ):
+                return False
 
         if "not_equals" in expected:
             return actual != expected["not_equals"]
 
-        if "contains" in expected:
-            return isinstance(actual, list) and expected["contains"] in actual
-
         if "not_contains" in expected:
             return not isinstance(actual, list) or expected["not_contains"] not in actual
+
+        # Missing features may satisfy explicitly negative operators, but must
+        # never make a positive constraint match and select a less-safe rule.
+        if actual is None:
+            return False
+
+        if "equals" in expected:
+            return actual == expected["equals"]
+
+        if "contains" in expected:
+            return isinstance(actual, list) and expected["contains"] in actual
 
         if "in" in expected:
             members = expected["in"]
             if not isinstance(members, list):
                 raise ValueError("'in' must be a list")
-            return actual in members
-
-        if actual is None:
-            return False
+            if actual not in members:
+                return False
 
         if "between" in expected:
             bounds = expected["between"]

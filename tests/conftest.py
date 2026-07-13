@@ -53,7 +53,7 @@ def make_windows() -> WindowsConfig:
         pre_release_pressure_minutes=180,
         pm_news_after_hour=14,
         am_red_news_at=time(8, 30),
-        powell_speech_at=time(9, 0),
+        powell_speech_at=time(10, 0),
     )
 
 

@@ -24,6 +24,17 @@ def test_state_store_rejects_invalid_snapshot_shape(tmp_path):
         StateStore(path).load()
 
 
+def test_state_store_rejects_negative_source_failure_count(tmp_path):
+    path = tmp_path / "state.json"
+    path.write_text(
+        json.dumps({"operations": {"consecutive_source_failures": -1}}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RuntimeError, match="non-negative int"):
+        StateStore(path).load()
+
+
 def test_state_store_rejects_future_schema_version(tmp_path):
     path = tmp_path / "state.json"
     path.write_text(
@@ -32,6 +43,43 @@ def test_state_store_rejects_future_schema_version(tmp_path):
     )
 
     with pytest.raises(RuntimeError, match="newer than supported"):
+        StateStore(path).load()
+
+
+@pytest.mark.parametrize(
+    ("section", "field"),
+    [
+        ("daily", "posted_for_date"),
+        ("recheck", "checked_for_date"),
+        ("weekly", "posted_for_week_start"),
+    ],
+)
+def test_state_store_rejects_malformed_deduplication_dates(
+    tmp_path, section, field
+):
+    path = tmp_path / "state.json"
+    path.write_text(
+        json.dumps({"schema_version": STATE_SCHEMA_VERSION, section: {field: "soon"}}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RuntimeError, match="must be an ISO date"):
+        StateStore(path).load()
+
+
+def test_state_store_rejects_noncanonical_deduplication_date(tmp_path):
+    path = tmp_path / "state.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": STATE_SCHEMA_VERSION,
+                "daily": {"posted_for_date": "20260416"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RuntimeError, match="YYYY-MM-DD"):
         StateStore(path).load()
 
 

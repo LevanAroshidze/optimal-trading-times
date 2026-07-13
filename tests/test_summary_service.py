@@ -3,6 +3,7 @@ from datetime import date, datetime
 import pytest
 
 from bot.config import load_rules
+from bot.formatter import DiscordFormatter
 from bot.models import CalendarEvent
 from bot.rule_engine import RuleEngine
 from bot.summary_service import DailySummaryService
@@ -23,7 +24,10 @@ def make_service() -> DailySummaryService:
             "NFP": ["non-farm employment change"],
             "CPI": ["cpi"],
             "PPI": ["ppi"],
-            "POWELL": ["fed chairman warsh speaks"],
+            "POWELL": [
+                "fed chairman warsh speaks",
+                "fed chairman warsh testifies",
+            ],
             "FOMC": ["federal funds rate", "fomc statement"],
             "RED_830AM": ["retail sales", "unemployment claims"],
         },
@@ -48,6 +52,30 @@ def test_summary_service_applies_no_news_rule():
     assert "09:50-10:10" in outlook.quiet_note
     assert outlook.decision.session_colors["NY_PM_FIRST_HALF"].value == "WHITE"
     assert outlook.decision.session_colors["NY_PM_SECOND_HALF"].value == "WHITE"
+
+
+def test_summary_service_classifies_july_13_as_one_day_before_moved_cpi():
+    service = make_service()
+
+    outlook = service.build_outlook_for_date(
+        date(2026, 7, 13),
+        [
+            CalendarEvent(
+                title="CPI m/m",
+                country="USD",
+                impact="High",
+                starts_at=datetime.fromisoformat("2026-07-14T08:30:00-04:00"),
+            )
+        ],
+    )
+    rendered = DiscordFormatter().render_for_console(
+        DiscordFormatter().format_daily(outlook)
+    )
+
+    assert outlook.decision.rule_id == "cpi_minus_1"
+    assert outlook.strongest_news_tomorrow == ["CPI at 8:30 AM NY time"]
+    assert "1 Day Before CPI" in rendered
+    assert "Tomorrow: CPI at 8:30 AM NY time." in rendered
 
 
 def test_summary_service_applies_pressure_overlay_to_default_green():
@@ -207,8 +235,8 @@ def test_summary_service_applies_post_bank_holiday_quiet_rule():
         (
             date(2026, 4, 14),
             "2026-04-13T08:30:00-04:00",
-            "Fed Chairman Warsh Speaks",
-            "2026-04-14T09:00:00-04:00",
+            "Fed Chairman Warsh Testifies",
+            "2026-04-14T10:00:00-04:00",
             "powell_10am_today",
         ),
         (

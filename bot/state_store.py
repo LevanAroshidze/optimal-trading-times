@@ -9,7 +9,7 @@ import time
 from collections.abc import Callable, Mapping
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Literal
 
@@ -221,7 +221,7 @@ class StateStore:
         payload: StateSection = {}
         for key, item in section.items():
             if key == "posted_for_date":
-                payload["posted_for_date"] = self._optional_string(
+                payload["posted_for_date"] = self._optional_iso_date(
                     item, f"{name}.posted_for_date"
                 )
             elif key == "fingerprint":
@@ -229,19 +229,23 @@ class StateStore:
                     item, f"{name}.fingerprint"
                 )
             elif key == "checked_for_date":
-                payload["checked_for_date"] = self._optional_string(
+                payload["checked_for_date"] = self._optional_iso_date(
                     item, f"{name}.checked_for_date"
                 )
             elif key == "posted_for_week_start":
-                payload["posted_for_week_start"] = self._optional_string(
+                payload["posted_for_week_start"] = self._optional_iso_date(
                     item, f"{name}.posted_for_week_start"
                 )
             elif key == "snapshot" and name == "state.daily":
                 payload["snapshot"] = self._string_list(item, f"{name}.snapshot")
             elif key == "consecutive_source_failures" and name == "state.operations":
-                if not isinstance(item, int) or isinstance(item, bool):
+                if (
+                    not isinstance(item, int)
+                    or isinstance(item, bool)
+                    or item < 0
+                ):
                     raise RuntimeError(
-                        f"{name}.consecutive_source_failures must be an int"
+                        f"{name}.consecutive_source_failures must be a non-negative int"
                     )
                 payload["consecutive_source_failures"] = item
             elif key == "last_source_status" and name == "state.operations":
@@ -286,6 +290,18 @@ class StateStore:
         if not isinstance(value, str):
             raise RuntimeError(f"{name} must be a string or null")
         return value
+
+    def _optional_iso_date(self, value: StructuredValue, name: str) -> str | None:
+        string_value = self._optional_string(value, name)
+        if string_value is None:
+            return None
+        try:
+            parsed = date.fromisoformat(string_value)
+        except ValueError as error:
+            raise RuntimeError(f"{name} must be an ISO date") from error
+        if parsed.isoformat() != string_value:
+            raise RuntimeError(f"{name} must use YYYY-MM-DD format")
+        return string_value
 
     def _string_list(self, value: StructuredValue, name: str) -> list[str]:
         if not isinstance(value, list):

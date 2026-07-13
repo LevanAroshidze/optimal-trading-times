@@ -21,7 +21,7 @@ from bot.state_store import (
     StateStore,
 )
 from bot.type_defs import SourceStatus
-from bot.webhook_sender import WebhookPayload
+from bot.webhook_sender import DiscordWebhookSender, WebhookError, WebhookPayload
 from tests.conftest import make_app_config, make_outlook
 
 
@@ -105,10 +105,23 @@ def test_notifier_posts_daily_summary_only_once(tmp_path):
 
 
 def test_notifier_posts_recheck_update_when_outlook_changes(tmp_path):
+    class CoveredSummaryService(FakeSummaryService):
+        async def load_events(self) -> list[CalendarEvent]:
+            return [
+                CalendarEvent(
+                    title="Retail Sales m/m",
+                    country="USD",
+                    impact="High",
+                    starts_at=datetime.fromisoformat(
+                        "2026-04-16T08:30:00-04:00"
+                    ),
+                )
+            ]
+
     state_store = StateStore(tmp_path / "state.json")
     morning = make_outlook("no_major_usd_news_day", "No major USD news today.", ["quiet"])
     changed = make_outlook("cpi_day", "CPI day.", ["strong_today:CPI at 8:30 AM NY time"])
-    summary = FakeSummaryService([morning, changed])
+    summary = CoveredSummaryService([morning, changed])
     sender = FakeSender()
     notifier = TradingCalendarNotifier(
         app_config=make_app_config(
@@ -162,6 +175,9 @@ def test_notifier_posts_weekly_outlook_once(tmp_path):
 
     assert len(sender.messages) == 1
     assert _render_message(sender.messages[0]).startswith("**Week Ahead")
+    state = state_store.load()
+    assert state.weekly.posted_for_week_start == "2026-04-20"
+    assert state.operations.pending_posts == {}
 
 
 def test_notifier_posts_fail_safe_daily_message_when_calendar_is_unavailable(tmp_path):
@@ -358,6 +374,108 @@ def test_notifier_ignores_stale_cache_when_calendar_unavailable(tmp_path):
     )
 
 
+def test_notifier_rejects_fresh_cache_that_does_not_cover_target_week(tmp_path):
+    class FailingSummaryService(FakeSummaryService):
+        async def load_events(self) -> list[CalendarEvent]:
+            raise CalendarSourceError("offline")
+
+    now = datetime(2026, 4, 16, 5, 0, tzinfo=UTC)
+    state_store = StateStore(tmp_path / "state.json")
+    state_store.save(
+        BotState(
+            calendar_cache=CalendarCacheState(
+                fetched_at=(now - timedelta(hours=1)).isoformat(),
+                events=[
+                    CalendarEvent(
+                        title="CPI m/m",
+                        country="USD",
+                        impact="High",
+                        starts_at=datetime.fromisoformat(
+                            "2026-04-01T08:30:00-04:00"
+                        ),
+                    )
+                ],
+            )
+        )
+    )
+    sender = FakeSender()
+    notifier = TradingCalendarNotifier(
+        app_config=make_app_config(str(tmp_path / "state.json")),
+        summary_service=FailingSummaryService(
+            [make_outlook("no_major_usd_news_day", "No major USD news today.", [])]
+        ),
+        formatter=DiscordFormatter(),
+        sender=sender,
+        state_store=state_store,
+    )
+
+    asyncio.run(notifier.run_once(now))
+
+    assert "Source: calendar unavailable - fail-safe plan" in _render_message(
+        sender.messages[0]
+    )
+
+
+def test_notifier_rejects_live_feed_outside_forced_target_week(tmp_path):
+    event = CalendarEvent(
+        title="CPI m/m",
+        country="USD",
+        impact="High",
+        starts_at=datetime.fromisoformat("2026-04-16T08:30:00-04:00"),
+    )
+
+    class EventSummaryService(FakeSummaryService):
+        async def load_events(self) -> list[CalendarEvent]:
+            return [event]
+
+    sender = FakeSender()
+    notifier = TradingCalendarNotifier(
+        app_config=make_app_config(str(tmp_path / "state.json")),
+        summary_service=EventSummaryService(
+            [make_outlook("no_major_usd_news_day", "No major USD news today.", [])]
+        ),
+        formatter=DiscordFormatter(),
+        sender=sender,
+        state_store=StateStore(tmp_path / "state.json"),
+        force_kind="daily",
+    )
+
+    asyncio.run(
+        notifier.run_once(
+            datetime(2026, 4, 16, 5, 0, tzinfo=UTC),
+            target_date_override=date(2026, 5, 4),
+        )
+    )
+
+    assert "Source: calendar unavailable - fail-safe plan" in _render_message(
+        sender.messages[0]
+    )
+
+
+def test_notifier_rejects_cache_timestamp_far_in_the_future(tmp_path):
+    now = datetime(2026, 4, 16, 5, 0, tzinfo=UTC)
+    notifier = TradingCalendarNotifier(
+        app_config=make_app_config(str(tmp_path / "state.json")),
+        summary_service=FakeSummaryService([make_outlook()]),
+        formatter=DiscordFormatter(),
+        sender=FakeSender(),
+        state_store=StateStore(tmp_path / "state.json"),
+    )
+    cache = CalendarCacheState(
+        fetched_at=(now + timedelta(days=30)).isoformat(),
+        events=[
+            CalendarEvent(
+                title="CPI m/m",
+                country="USD",
+                impact="High",
+                starts_at=datetime.fromisoformat("2026-04-16T08:30:00-04:00"),
+            )
+        ],
+    )
+
+    assert notifier._fresh_cached_events(cache, now) is None
+
+
 def test_notifier_weekly_uses_previous_cache_when_live_target_week_missing(tmp_path):
     class WeeklyFallbackSummaryService(FakeSummaryService):
         def build_weekly_outlook(
@@ -535,6 +653,25 @@ def test_notifier_persists_and_respects_source_retry_after(tmp_path):
     assert state.operations.source_retry_after is not None
 
 
+@pytest.mark.parametrize("retry_after", [float("nan"), float("inf"), -1.0, 0.0])
+def test_notifier_rejects_invalid_source_retry_after(tmp_path, retry_after):
+    notifier = TradingCalendarNotifier(
+        app_config=make_app_config(str(tmp_path / "state.json")),
+        summary_service=FakeSummaryService([make_outlook()]),
+        formatter=DiscordFormatter(),
+        sender=FakeSender(),
+        state_store=StateStore(tmp_path / "state.json"),
+    )
+
+    assert (
+        notifier._source_retry_after(
+            datetime(2026, 4, 16, 5, 0, tzinfo=UTC),
+            CalendarSourceError("bad retry", retry_after_seconds=retry_after),
+        )
+        is None
+    )
+
+
 def test_pending_post_marker_blocks_automatic_duplicate_and_alerts_ops(tmp_path):
     state_store = StateStore(tmp_path / "state.json")
     state_store.save(
@@ -563,6 +700,73 @@ def test_pending_post_marker_blocks_automatic_duplicate_and_alerts_ops(tmp_path)
     assert len(ops_sender.messages) == 1
     state = state_store.load()
     assert "pending_post:daily:2026-04-16" in state.operations.alerted_keys
+
+
+def test_webhook_failure_retains_pending_marker_and_propagates(tmp_path):
+    class FailingWebhookSender:
+        async def send_message(self, content: str | WebhookPayload) -> None:
+            raise WebhookError("delivery attempts exhausted")
+
+    state_path = tmp_path / "state.json"
+    state_store = StateStore(state_path)
+    notifier = TradingCalendarNotifier(
+        app_config=make_app_config(str(state_path)),
+        summary_service=FakeSummaryService(
+            [make_outlook("no_major_usd_news_day", "No major USD news today.", ["quiet"])]
+        ),
+        formatter=DiscordFormatter(),
+        sender=FailingWebhookSender(),
+        state_store=state_store,
+    )
+
+    with pytest.raises(WebhookError, match="delivery attempts exhausted"):
+        asyncio.run(notifier.run_once(datetime(2026, 4, 16, 5, 0, tzinfo=UTC)))
+
+    state = state_store.load()
+    assert state.daily.posted_for_date is None
+    assert "daily:2026-04-16" in state.operations.pending_posts
+
+
+def test_partial_multi_chunk_delivery_retains_pending_marker(
+    tmp_path, monkeypatch
+):
+    class PlainTextFormatter(DiscordFormatter):
+        def format_daily(self, outlook):
+            return "first\nsecond"
+
+    attempted_chunks: list[str] = []
+
+    async def fail_second_chunk(self, client, payload):
+        attempted_chunks.append(payload["content"])
+        if len(attempted_chunks) == 2:
+            raise WebhookError("second chunk failed")
+
+    monkeypatch.setattr(
+        DiscordWebhookSender, "_post_with_retries", fail_second_chunk
+    )
+    state_path = tmp_path / "state.json"
+    state_store = StateStore(state_path)
+    sender = DiscordWebhookSender(
+        "https://discord.com/api/webhooks/123456789012345678/abcDEFghi-_JKL",
+        max_message_length=6,
+    )
+    notifier = TradingCalendarNotifier(
+        app_config=make_app_config(str(state_path)),
+        summary_service=FakeSummaryService(
+            [make_outlook("no_major_usd_news_day", "No major USD news today.", ["quiet"])]
+        ),
+        formatter=PlainTextFormatter(),
+        sender=sender,
+        state_store=state_store,
+    )
+
+    with pytest.raises(WebhookError, match="second chunk failed"):
+        asyncio.run(notifier.run_once(datetime(2026, 4, 16, 5, 0, tzinfo=UTC)))
+
+    assert attempted_chunks == ["first", "second"]
+    state = state_store.load()
+    assert state.daily.posted_for_date is None
+    assert "daily:2026-04-16" in state.operations.pending_posts
 
 
 def test_pending_post_marker_survives_final_save_failure_to_prevent_repost(tmp_path):
@@ -663,6 +867,18 @@ def test_recheck_uses_recheck_target_when_daily_target_differs(tmp_path):
         def __init__(self) -> None:
             super().__init__([])
             self.requested_dates: list[date] = []
+
+        async def load_events(self) -> list[CalendarEvent]:
+            return [
+                CalendarEvent(
+                    title="Retail Sales m/m",
+                    country="USD",
+                    impact="High",
+                    starts_at=datetime.fromisoformat(
+                        "2026-04-16T08:30:00-04:00"
+                    ),
+                )
+            ]
 
         def build_outlook_for_date(
             self,
@@ -851,6 +1067,19 @@ def test_notifier_skips_weekend_recheck_when_disabled_with_stale_baseline(
 
 
 def test_notifier_posts_weekday_recheck_with_same_date_baseline(tmp_path):
+    class CoveredSummaryService(FakeSummaryService):
+        async def load_events(self) -> list[CalendarEvent]:
+            return [
+                CalendarEvent(
+                    title="Retail Sales m/m",
+                    country="USD",
+                    impact="High",
+                    starts_at=datetime.fromisoformat(
+                        "2026-05-04T08:30:00-04:00"
+                    ),
+                )
+            ]
+
     state_store = StateStore(tmp_path / "state.json")
     baseline = make_outlook(
         "no_major_usd_news_day",
@@ -864,7 +1093,7 @@ def test_notifier_posts_weekday_recheck_with_same_date_baseline(tmp_path):
         ["strong_today:CPI at 8:30 AM NY time"],
         target_date=date(2026, 5, 4),
     )
-    summary = FakeSummaryService([changed])
+    summary = CoveredSummaryService([changed])
     state_store.save(
         BotState(
             daily=DailyPostState(
@@ -950,6 +1179,65 @@ def test_notifier_posts_cached_recheck_update_with_same_date_baseline(tmp_path):
     assert "Source: cached calendar data" in _render_message(sender.messages[0])
 
 
+def test_notifier_skips_cached_recheck_when_cache_is_from_another_week(tmp_path):
+    class FailingSummaryService(FakeSummaryService):
+        async def load_events(self) -> list[CalendarEvent]:
+            raise CalendarSourceError("offline")
+
+    now = datetime(2026, 5, 4, 12, 0, tzinfo=UTC)
+    baseline = make_outlook(
+        "no_major_usd_news_day",
+        "No major USD news today.",
+        ["quiet"],
+        target_date=date(2026, 5, 4),
+    )
+    changed = make_outlook(
+        "cpi_day",
+        "CPI day.",
+        ["strong_today:CPI at 8:30 AM NY time"],
+        target_date=date(2026, 5, 4),
+    )
+    summary = FailingSummaryService([changed])
+    state_store = StateStore(tmp_path / "state.json")
+    state_store.save(
+        BotState(
+            daily=DailyPostState(
+                posted_for_date="2026-05-04",
+                fingerprint=summary.daily_fingerprint(baseline),
+                snapshot=baseline.calendar_snapshot,
+            ),
+            calendar_cache=CalendarCacheState(
+                fetched_at=(now - timedelta(hours=1)).isoformat(),
+                events=[
+                    CalendarEvent(
+                        title="CPI m/m",
+                        country="USD",
+                        impact="High",
+                        starts_at=datetime.fromisoformat(
+                            "2026-04-27T08:30:00-04:00"
+                        ),
+                    )
+                ],
+            ),
+        )
+    )
+    sender = FakeSender()
+    notifier = TradingCalendarNotifier(
+        app_config=make_app_config(
+            str(tmp_path / "state.json"), post_on_weekend=False
+        ),
+        summary_service=summary,
+        formatter=DiscordFormatter(),
+        sender=sender,
+        state_store=state_store,
+    )
+
+    asyncio.run(notifier.run_once(now))
+
+    assert sender.messages == []
+    assert state_store.load().recheck.checked_for_date is None
+
+
 def test_notifier_dry_run_does_not_send_or_persist(tmp_path):
     state_store = StateStore(tmp_path / "state.json")
     summary = FakeSummaryService(
@@ -971,6 +1259,86 @@ def test_notifier_dry_run_does_not_send_or_persist(tmp_path):
     assert sent and sender.messages == []
     state = state_store.load()
     assert state.daily.posted_for_date is None
+
+
+def test_notifier_rejects_naive_now(tmp_path):
+    notifier = TradingCalendarNotifier(
+        app_config=make_app_config(str(tmp_path / "state.json")),
+        summary_service=FakeSummaryService([make_outlook()]),
+        formatter=DiscordFormatter(),
+        sender=FakeSender(),
+        state_store=StateStore(tmp_path / "state.json"),
+    )
+
+    with pytest.raises(ValueError, match="timezone-aware"):
+        asyncio.run(notifier.run_once(datetime(2026, 4, 16, 5, 0)))
+
+
+@pytest.mark.parametrize(
+    ("now", "expected_due"),
+    [
+        (datetime(2026, 1, 15, 12, 59, tzinfo=UTC), False),
+        (datetime(2026, 1, 15, 13, 0, tzinfo=UTC), True),
+        (datetime(2026, 7, 15, 11, 59, tzinfo=UTC), False),
+        (datetime(2026, 7, 15, 12, 0, tzinfo=UTC), True),
+    ],
+)
+def test_ny_recheck_schedule_tracks_dst(tmp_path, now, expected_due):
+    notifier = TradingCalendarNotifier(
+        app_config=make_app_config(str(tmp_path / "state.json")),
+        summary_service=FakeSummaryService([make_outlook()]),
+        formatter=DiscordFormatter(),
+        sender=FakeSender(),
+        state_store=StateStore(tmp_path / "state.json"),
+    )
+
+    assert notifier._is_due(now, notifier.app_config.ny_recheck) is expected_due
+
+
+def test_post_window_includes_exact_expiration_boundary(tmp_path):
+    app_config = make_app_config(
+        str(tmp_path / "state.json"), max_post_age_minutes=120
+    )
+    notifier = TradingCalendarNotifier(
+        app_config=app_config,
+        summary_service=FakeSummaryService([make_outlook()]),
+        formatter=DiscordFormatter(),
+        sender=FakeSender(),
+        state_store=StateStore(tmp_path / "state.json"),
+    )
+
+    assert not notifier._is_post_too_late(
+        datetime(2026, 7, 15, 7, 0, tzinfo=UTC),
+        app_config.morning_summary,
+    )
+    assert notifier._is_post_too_late(
+        datetime(2026, 7, 15, 7, 0, 1, tzinfo=UTC),
+        app_config.morning_summary,
+    )
+
+
+def test_weekly_schedule_has_sunday_slot_and_monday_fallback(tmp_path):
+    notifier = TradingCalendarNotifier(
+        app_config=make_app_config(str(tmp_path / "state.json")),
+        summary_service=FakeSummaryService([make_outlook()]),
+        formatter=DiscordFormatter(),
+        sender=FakeSender(),
+        state_store=StateStore(tmp_path / "state.json"),
+    )
+    schedule = notifier.app_config.weekly_outlook
+
+    assert notifier._weekly_target_week_start(
+        datetime(2026, 7, 12, 17, 0, tzinfo=UTC), schedule
+    ) == date(2026, 7, 13)
+    assert notifier._weekly_target_week_start(
+        datetime(2026, 7, 13, 4, 59, tzinfo=UTC), schedule
+    ) == date(2026, 7, 13)
+    assert (
+        notifier._weekly_target_week_start(
+            datetime(2026, 7, 13, 5, 0, tzinfo=UTC), schedule
+        )
+        is None
+    )
 
 
 @pytest.mark.parametrize("force", ["daily", "weekly", "recheck"])

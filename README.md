@@ -92,6 +92,8 @@ Run commands from the repository root unless you pass `--config-dir`.
 | `--force-kind {daily,weekly,recheck}` | Force a specific post kind to run. Use with `--dry-run`. |
 | `--config-dir PATH` | Use a non-default config directory (good for staging configs). |
 | `--log-level {DEBUG,INFO,WARNING,ERROR}` | Adjust log verbosity. |
+| `--diagnose-week` | Print rule and feature diagnostics without sending or writing state. |
+| `--preview-message-styles` | Send style previews to `DISCORD_PREVIEW_WEBHOOK_URL`; cannot be combined with dry-run or diagnostics. |
 
 ## Deployment
 
@@ -117,9 +119,11 @@ The application internally gates these schedules:
 
 A `policy.max_post_age_minutes` value (defaults to 240) prevents the bot from retroactively posting a stale "good morning" note hours later if state was lost.
 When `policy.post_on_weekend: false`, automatic Saturday/Sunday morning summaries and NY rechecks are suppressed. The Sunday `21:00 Asia/Tbilisi` weekly outlook still runs as the future-week overview.
-The bot stores last-known-good calendar events in `data/state.json` and can use fresh cached data for up to `policy.calendar_cache_max_age_hours` when the live calendar is unavailable. Cached posts are clearly marked.
+The bot stores last-known-good calendar events in `data/state.json` and can use fresh cached data for up to `policy.calendar_cache_max_age_hours` when the live calendar is unavailable. Live or cached data is used for daily/recheck decisions only when it contains events from the target New York market week; this also keeps a target-date override outside the loaded feed from producing a false quiet-day plan. Future-dated cache timestamps outside a small clock-skew tolerance are rejected. Cached posts are clearly marked.
 If the default weekly JSON feed does not contain the coming week by the Sunday `21:00 Asia/Tbilisi` outlook slot, the bot fetches the Forex Factory target-week calendar page and uses that export instead.
 If `DISCORD_OPS_WEBHOOK_URL` is set, limited ops-only alerts are sent for repeated source failures, weekly no-data skips, and state-lock recovery/failure.
+
+Discord delivery uses independent `delivery.timeout_seconds`, `delivery.max_retries`, and `delivery.retry_backoff_seconds` settings. Timeouts are capped at 60 seconds, configured retries at five, and base backoff at 10 seconds so a bad configuration cannot hold the Railway cron indefinitely. Each request asks Discord to wait for message creation confirmation and suppresses all allowed mentions. Transport failures and `5xx` responses use bounded retries; a long `429` delay fails the cron visibly instead of holding the state lock across later Railway invocations.
 
 ## Tests, lint, types
 

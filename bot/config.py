@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import time
 from pathlib import Path
+from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import yaml
@@ -32,6 +34,9 @@ class ConfigError(ValueError):
 class DeliveryConfig:
     webhook_url_env: str
     ops_webhook_url_env: str | None = None
+    timeout_seconds: float = 10.0
+    max_retries: int = 3
+    retry_backoff_seconds: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -132,6 +137,9 @@ class MessagesConfig:
 
 
 _VALID_WEEKDAYS = {"MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"}
+_MAX_TIMEOUT_SECONDS = 60.0
+_MAX_RETRIES = 5
+_MAX_RETRY_BACKOFF_SECONDS = 10.0
 _DEFAULT_SESSION_WINDOWS: dict[str, tuple[time, time]] = {
     SessionName.LONDON.value: (time(3, 0), time(7, 0)),
     SessionName.PREMARKET.value: (time(7, 0), time(8, 30)),
@@ -144,7 +152,15 @@ _DEFAULT_SESSION_WINDOWS: dict[str, tuple[time, time]] = {
 _ALLOWED_APP_KEYS = frozenset(
     {"delivery", "runtime", "schedules", "calendar", "windows", "policy"}
 )
-_ALLOWED_DELIVERY_KEYS = frozenset({"webhook_url_env", "ops_webhook_url_env"})
+_ALLOWED_DELIVERY_KEYS = frozenset(
+    {
+        "webhook_url_env",
+        "ops_webhook_url_env",
+        "timeout_seconds",
+        "max_retries",
+        "retry_backoff_seconds",
+    }
+)
 _ALLOWED_RUNTIME_KEYS = frozenset({"state_path", "lock_path"})
 _ALLOWED_SCHEDULE_KEYS = frozenset({"timezone", "hour", "minute"})
 _ALLOWED_WEEKLY_KEYS = _ALLOWED_SCHEDULE_KEYS | {"weekday"}
@@ -177,6 +193,29 @@ _ALLOWED_POLICY_KEYS = frozenset(
         "max_consecutive_source_failures",
         "duplicate_post_warning",
         "calendar_cache_max_age_hours",
+    }
+)
+_ALLOWED_MESSAGE_KEYS = frozenset(
+    {
+        "strong_news_advice",
+        "other_red_news_advice",
+        "calendar_unavailable_note",
+        "calendar_cached_note",
+        "update_header",
+        "week_ahead_header",
+        "quiet_day_note",
+        "day_color_labels",
+    }
+)
+_ALLOWED_RULE_KEYS = frozenset(
+    {
+        "id",
+        "priority",
+        "when",
+        "day_color",
+        "tradable",
+        "session_colors",
+        "reason",
     }
 )
 _ALLOWED_RULE_OPERATORS = frozenset(
@@ -212,6 +251,14 @@ def _reject_unknown_keys(
         )
 
 
+def _require_keys(
+    mapping: StructuredMapping, required: frozenset[str], name: str
+) -> None:
+    missing = sorted(required - set(mapping))
+    if missing:
+        raise ConfigError(f"{name} is missing required keys: {', '.join(missing)}")
+
+
 def _validate_timezone(tz_name: str, name: str) -> str:
     try:
         ZoneInfo(tz_name)
@@ -223,9 +270,15 @@ def _validate_timezone(tz_name: str, name: str) -> str:
 def load_app_config(path: Path) -> AppConfig:
     raw = _expect_mapping(_load_yaml(path), path.name)
     _reject_unknown_keys(raw, _ALLOWED_APP_KEYS, path.name)
+    _require_keys(
+        raw,
+        frozenset({"delivery", "runtime", "schedules", "calendar"}),
+        path.name,
+    )
 
     delivery_map = _expect_mapping(raw["delivery"], "delivery")
     _reject_unknown_keys(delivery_map, _ALLOWED_DELIVERY_KEYS, "delivery")
+    _require_keys(delivery_map, frozenset({"webhook_url_env"}), "delivery")
     webhook_env = _expect_string(
         delivery_map["webhook_url_env"], "delivery.webhook_url_env"
     )
@@ -237,9 +290,32 @@ def load_app_config(path: Path) -> AppConfig:
         if ops_env_raw is not None
         else None
     )
+    delivery_timeout = _coerce_float(
+        delivery_map.get("timeout_seconds", DeliveryConfig.timeout_seconds),
+        "delivery.timeout_seconds",
+    )
+    if not 0 < delivery_timeout <= _MAX_TIMEOUT_SECONDS:
+        raise ConfigError("delivery.timeout_seconds must be between 0 and 60")
+    delivery_max_retries = _coerce_int(
+        delivery_map.get("max_retries", DeliveryConfig.max_retries),
+        "delivery.max_retries",
+    )
+    if not 0 <= delivery_max_retries <= _MAX_RETRIES:
+        raise ConfigError("delivery.max_retries must be between 0 and 5")
+    delivery_retry_backoff = _coerce_float(
+        delivery_map.get(
+            "retry_backoff_seconds", DeliveryConfig.retry_backoff_seconds
+        ),
+        "delivery.retry_backoff_seconds",
+    )
+    if not 0 <= delivery_retry_backoff <= _MAX_RETRY_BACKOFF_SECONDS:
+        raise ConfigError(
+            "delivery.retry_backoff_seconds must be between 0 and 10"
+        )
 
     runtime_map = _expect_mapping(raw["runtime"], "runtime")
     _reject_unknown_keys(runtime_map, _ALLOWED_RUNTIME_KEYS, "runtime")
+    _require_keys(runtime_map, frozenset({"state_path"}), "runtime")
     state_path = _expect_string(runtime_map["state_path"], "runtime.state_path")
     if not state_path.strip():
         raise ConfigError("runtime.state_path must be non-empty")
@@ -252,6 +328,7 @@ def load_app_config(path: Path) -> AppConfig:
 
     schedules_map = _expect_mapping(raw["schedules"], "schedules")
     _reject_unknown_keys(schedules_map, _ALLOWED_SCHEDULES_KEYS, "schedules")
+    _require_keys(schedules_map, _ALLOWED_SCHEDULES_KEYS, "schedules")
     morning_summary = _load_schedule(
         schedules_map["morning_summary"], "morning_summary"
     )
@@ -259,17 +336,29 @@ def load_app_config(path: Path) -> AppConfig:
     weekly_outlook = _load_weekly_schedule(
         schedules_map["weekly_outlook"], "weekly_outlook"
     )
+    if weekly_outlook.weekday != "SUN":
+        raise ConfigError("weekly_outlook.weekday must be SUN")
+    if weekly_outlook.timezone != morning_summary.timezone:
+        raise ConfigError(
+            "weekly_outlook.timezone must match morning_summary.timezone"
+        )
 
     calendar_map = _expect_mapping(raw["calendar"], "calendar")
     _reject_unknown_keys(calendar_map, _ALLOWED_CALENDAR_KEYS, "calendar")
+    _require_keys(
+        calendar_map,
+        frozenset({"urls", "timeout_seconds", "market_timezone"}),
+        "calendar",
+    )
     urls = _expect_string_list(calendar_map["urls"], "calendar.urls")
     if not urls:
         raise ConfigError("calendar.urls must contain at least one URL")
+    urls = [_validate_http_url(url, "calendar.urls") for url in urls]
     timeout_seconds = _coerce_float(
         calendar_map["timeout_seconds"], "calendar.timeout_seconds"
     )
-    if timeout_seconds <= 0:
-        raise ConfigError("calendar.timeout_seconds must be positive")
+    if not 0 < timeout_seconds <= _MAX_TIMEOUT_SECONDS:
+        raise ConfigError("calendar.timeout_seconds must be between 0 and 60")
     market_tz = _validate_timezone(
         _expect_string(calendar_map["market_timezone"], "calendar.market_timezone"),
         "calendar.market_timezone",
@@ -278,16 +367,18 @@ def load_app_config(path: Path) -> AppConfig:
         calendar_map.get("user_agent", CalendarConfig.user_agent),
         "calendar.user_agent",
     )
+    if not user_agent.strip():
+        raise ConfigError("calendar.user_agent must be non-empty")
     max_retries_raw = calendar_map.get("max_retries", CalendarConfig.max_retries)
     max_retries = _coerce_int(max_retries_raw, "calendar.max_retries")
-    if max_retries < 1:
-        raise ConfigError("calendar.max_retries must be at least 1")
+    if not 1 <= max_retries <= _MAX_RETRIES:
+        raise ConfigError("calendar.max_retries must be between 1 and 5")
     retry_backoff = _coerce_float(
         calendar_map.get("retry_backoff_seconds", CalendarConfig.retry_backoff_seconds),
         "calendar.retry_backoff_seconds",
     )
-    if retry_backoff < 0:
-        raise ConfigError("calendar.retry_backoff_seconds must be non-negative")
+    if not 0 <= retry_backoff <= _MAX_RETRY_BACKOFF_SECONDS:
+        raise ConfigError("calendar.retry_backoff_seconds must be between 0 and 10")
 
     windows = _load_windows_config(raw.get("windows"))
     policy = _load_policy_config(raw.get("policy"))
@@ -296,6 +387,9 @@ def load_app_config(path: Path) -> AppConfig:
         delivery=DeliveryConfig(
             webhook_url_env=webhook_env,
             ops_webhook_url_env=ops_env,
+            timeout_seconds=delivery_timeout,
+            max_retries=delivery_max_retries,
+            retry_backoff_seconds=delivery_retry_backoff,
         ),
         runtime=RuntimeConfig(state_path=state_path, lock_path=lock_path),
         morning_summary=morning_summary,
@@ -367,6 +461,7 @@ def load_messages(path: Path | None) -> MessagesConfig:
     if path is None or not path.exists():
         return MessagesConfig()
     raw = _expect_mapping(_load_yaml(path), path.name)
+    _reject_unknown_keys(raw, _ALLOWED_MESSAGE_KEYS, path.name)
     defaults = MessagesConfig()
     return MessagesConfig(
         strong_news_advice=_expect_string(
@@ -413,6 +508,21 @@ def load_rules(path: Path) -> list[RuleDefinition]:
     seen_ids: set[str] = set()
     for raw_item in raw_rules:
         item = _expect_mapping(raw_item, "rule")
+        _reject_unknown_keys(item, _ALLOWED_RULE_KEYS, "rule")
+        _require_keys(
+            item,
+            frozenset(
+                {
+                    "id",
+                    "priority",
+                    "day_color",
+                    "tradable",
+                    "session_colors",
+                    "reason",
+                }
+            ),
+            "rule",
+        )
         rule_id = _expect_string(item["id"], "rule.id")
         if rule_id in seen_ids:
             raise ConfigError(f"Duplicate rule id: {rule_id}")
@@ -462,6 +572,7 @@ def find_rule_priority_collisions(
 def _load_schedule(raw: StructuredValue, name: str) -> ScheduleConfig:
     schedule = _expect_mapping(raw, name)
     _reject_unknown_keys(schedule, _ALLOWED_SCHEDULE_KEYS, name)
+    _require_keys(schedule, _ALLOWED_SCHEDULE_KEYS, name)
     hour = _coerce_int(schedule["hour"], f"{name}.hour")
     minute = _coerce_int(schedule["minute"], f"{name}.minute")
     if not 0 <= hour <= 23:
@@ -478,6 +589,7 @@ def _load_schedule(raw: StructuredValue, name: str) -> ScheduleConfig:
 def _load_weekly_schedule(raw: StructuredValue, name: str) -> WeeklyScheduleConfig:
     weekly = _expect_mapping(raw, name)
     _reject_unknown_keys(weekly, _ALLOWED_WEEKLY_KEYS, name)
+    _require_keys(weekly, _ALLOWED_WEEKLY_KEYS, name)
     schedule = _load_schedule({k: v for k, v in weekly.items() if k != "weekday"}, name)
     weekday = _expect_string(weekly["weekday"], f"{name}.weekday").upper()
     if weekday not in _VALID_WEEKDAYS:
@@ -501,7 +613,7 @@ def _load_windows_config(raw: StructuredValue | None) -> WindowsConfig:
             pre_release_pressure_minutes=180,
             pm_news_after_hour=14,
             am_red_news_at=time(8, 30),
-            powell_speech_at=time(9, 0),
+            powell_speech_at=time(10, 0),
         )
 
     mapping = _expect_mapping(raw, "windows")
@@ -533,7 +645,7 @@ def _load_windows_config(raw: StructuredValue | None) -> WindowsConfig:
         mapping.get("am_red_news_at", "08:30"), "windows.am_red_news_at"
     )
     powell = _coerce_time(
-        mapping.get("powell_speech_at", "09:00"), "windows.powell_speech_at"
+        mapping.get("powell_speech_at", "10:00"), "windows.powell_speech_at"
     )
 
     return WindowsConfig(
@@ -565,6 +677,11 @@ def _coerce_session_windows(value: StructuredValue) -> dict[str, SessionWindowCo
         window = _expect_mapping(raw_window, f"windows.session_windows.{session}")
         _reject_unknown_keys(
             window, frozenset({"start", "end"}), f"windows.session_windows.{session}"
+        )
+        _require_keys(
+            window,
+            frozenset({"start", "end"}),
+            f"windows.session_windows.{session}",
         )
         start = _coerce_time(
             window["start"], f"windows.session_windows.{session}.start"
@@ -758,6 +875,8 @@ def _coerce_rule_operator_map(
             )
         elif operator in ("any_of", "all_of"):
             members = _expect_list(item, f"{name}.{operator}")
+            if not members:
+                raise ConfigError(f"{name}.{operator} must not be empty")
             operator_map[operator] = [  # type: ignore[literal-required]
                 _coerce_rule_operator_map(
                     _expect_mapping(member, f"{name}.{operator}[{index}]"),
@@ -797,6 +916,14 @@ def _expect_string(value: StructuredValue, name: str) -> str:
     return value
 
 
+def _validate_http_url(value: str, name: str) -> str:
+    cleaned = value.strip()
+    parsed = urlsplit(cleaned)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ConfigError(f"{name} must contain valid HTTP(S) URLs")
+    return cleaned
+
+
 def _expect_string_list(value: StructuredValue, name: str) -> list[str]:
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
         raise ConfigError(f"{name} must be a list of strings")
@@ -822,9 +949,12 @@ def _coerce_float(value: StructuredValue, name: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float, str)):
         raise ConfigError(f"{name} must be a float")
     try:
-        return float(value)
+        coerced = float(value)
     except ValueError as error:
         raise ConfigError(f"{name} must be a float") from error
+    if not math.isfinite(coerced):
+        raise ConfigError(f"{name} must be finite")
+    return coerced
 
 
 def _coerce_time(value: StructuredValue, name: str) -> time:

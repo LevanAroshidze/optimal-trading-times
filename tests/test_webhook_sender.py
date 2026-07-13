@@ -8,6 +8,7 @@ import pytest
 from bot.webhook_sender import (
     DiscordWebhookSender,
     WebhookError,
+    WebhookPayload,
     validate_webhook_url,
 )
 
@@ -28,12 +29,11 @@ def test_validate_webhook_url_rejects_other_hosts():
         validate_webhook_url("https://example.com/api/webhooks/1/abc", "DISCORD_WEBHOOK_URL")
 
 
-def test_validate_webhook_url_truncates_long_invalid_value_in_error():
-    long = "https://" + "x" * 200
+@pytest.mark.parametrize("invalid", ["secret-token", "https://" + "x" * 200])
+def test_validate_webhook_url_does_not_echo_invalid_value(invalid):
     with pytest.raises(WebhookError) as exc_info:
-        validate_webhook_url(long, "DISCORD_WEBHOOK_URL")
-    assert "..." in str(exc_info.value)
-    assert long not in str(exc_info.value)
+        validate_webhook_url(invalid, "DISCORD_WEBHOOK_URL")
+    assert invalid not in str(exc_info.value)
 
 
 def test_split_message_under_limit():
@@ -47,6 +47,33 @@ def test_split_message_splits_on_newlines():
     assert len(chunks) > 1
     for chunk in chunks:
         assert len(chunk) <= 500
+
+
+def test_split_message_does_not_produce_empty_chunks():
+    chunks = DiscordWebhookSender._split_message("\n" * 501 + "message", 500)
+
+    assert chunks == ["message"]
+
+
+@pytest.mark.parametrize("content", ["", "   ", "\n" * 2001])
+def test_send_message_rejects_empty_plain_content(content):
+    with pytest.raises(WebhookError, match="empty Discord message"):
+        asyncio.run(DiscordWebhookSender(VALID_URL).send_message(content))
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"timeout_seconds": float("nan")},
+        {"timeout_seconds": float("inf")},
+        {"retry_backoff_seconds": float("nan")},
+        {"retry_backoff_seconds": float("inf")},
+        {"max_message_length": 0},
+    ],
+)
+def test_sender_rejects_values_that_can_hang_or_disable_delivery(kwargs):
+    with pytest.raises(ValueError):
+        DiscordWebhookSender(VALID_URL, **kwargs)
 
 
 def test_send_message_success_uses_one_post():
@@ -65,6 +92,45 @@ def test_send_message_success_uses_one_post():
 
     asyncio.run(run())
     assert len(calls) == 1
+    assert calls[0].url.params["wait"] == "true"
+
+
+def test_send_message_suppresses_mentions_in_payload(monkeypatch):
+    captured: list[dict] = []
+
+    async def capture_payload(self, client, payload):
+        captured.append(payload)
+
+    monkeypatch.setattr(DiscordWebhookSender, "_post_with_retries", capture_payload)
+
+    asyncio.run(DiscordWebhookSender(VALID_URL).send_message("@everyone hello"))
+
+    assert captured == [{"content": "@everyone hello", "allowed_mentions": {"parse": []}}]
+
+
+def test_send_embed_suppresses_mentions_in_payload(monkeypatch):
+    captured: list[dict] = []
+
+    async def capture_payload(self, client, payload):
+        captured.append(payload)
+
+    monkeypatch.setattr(DiscordWebhookSender, "_post_with_retries", capture_payload)
+
+    message = WebhookPayload(
+        content="@everyone summary",
+        embeds=[{"title": "@here calendar", "description": "<@123456789>"}],
+    )
+    asyncio.run(DiscordWebhookSender(VALID_URL).send_message(message))
+
+    assert captured == [
+        {
+            "content": "@everyone summary",
+            "embeds": [
+                {"title": "@here calendar", "description": "<@123456789>"}
+            ],
+            "allowed_mentions": {"parse": []},
+        }
+    ]
 
 
 def test_send_message_retries_on_429_then_succeeds():
@@ -91,8 +157,95 @@ def test_send_message_retries_on_429_then_succeeds():
     assert counter["calls"] == 2
 
 
-def test_send_message_raises_on_4xx_other_than_429():
+def test_send_message_rejects_long_429_without_sleeping(monkeypatch):
+    slept: list[float] = []
+
     def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(429, headers={"Retry-After": "300"})
+
+    async def record_sleep(delay: float) -> None:
+        slept.append(delay)
+
+    monkeypatch.setattr("bot.webhook_sender.asyncio.sleep", record_sleep)
+    sender = DiscordWebhookSender(VALID_URL, timeout_seconds=1)
+    transport = httpx.MockTransport(handler)
+
+    async def run():
+        async with httpx.AsyncClient(transport=transport) as client:
+            await sender._post_with_retries(client, {"content": "hi"})
+
+    with pytest.raises(WebhookError, match="refusing to block"):
+        asyncio.run(run())
+    assert slept == []
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        httpx.Response(429, headers={"Retry-After": "inf"}),
+        httpx.Response(429, content=b'{"retry_after": NaN}'),
+        httpx.Response(429, json={"retry_after": -5}),
+    ],
+)
+def test_retry_after_rejects_nonfinite_or_negative_values(response):
+    assert DiscordWebhookSender._parse_retry_after(response) == 1.0
+
+
+def test_send_message_retries_read_timeout_then_succeeds():
+    counter = {"calls": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        counter["calls"] += 1
+        if counter["calls"] == 1:
+            raise httpx.ReadTimeout("response timed out", request=request)
+        return httpx.Response(204)
+
+    sender = DiscordWebhookSender(
+        VALID_URL,
+        timeout_seconds=1,
+        retry_backoff_seconds=0,
+    )
+    transport = httpx.MockTransport(handler)
+
+    async def run():
+        async with httpx.AsyncClient(transport=transport) as client:
+            await sender._post_with_retries(client, {"content": "hi"})
+
+    asyncio.run(run())
+    assert counter["calls"] == 2
+
+
+def test_send_message_persistent_request_error_exhausts_configured_retries():
+    counter = {"calls": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        counter["calls"] += 1
+        raise httpx.ReadTimeout("response timed out", request=request)
+
+    sender = DiscordWebhookSender(
+        VALID_URL,
+        timeout_seconds=1,
+        max_retries=3,
+        retry_backoff_seconds=0,
+    )
+    transport = httpx.MockTransport(handler)
+
+    async def run():
+        async with httpx.AsyncClient(transport=transport) as client:
+            await sender._post_with_retries(client, {"content": "hi"})
+
+    with pytest.raises(WebhookError, match="after 4 attempts") as exc_info:
+        asyncio.run(run())
+
+    assert counter["calls"] == 4
+    assert isinstance(exc_info.value.__cause__, httpx.ReadTimeout)
+
+
+def test_send_message_raises_on_4xx_other_than_429():
+    counter = {"calls": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        counter["calls"] += 1
         return httpx.Response(400, json={"message": "bad"})
 
     sender = DiscordWebhookSender(VALID_URL, timeout_seconds=1)
@@ -104,13 +257,22 @@ def test_send_message_raises_on_4xx_other_than_429():
 
     with pytest.raises(WebhookError, match="status 400"):
         asyncio.run(run())
+    assert counter["calls"] == 1
 
 
 def test_send_message_retries_on_5xx_then_gives_up():
+    counter = {"calls": 0}
+
     def handler(request: httpx.Request) -> httpx.Response:
+        counter["calls"] += 1
         return httpx.Response(503)
 
-    sender = DiscordWebhookSender(VALID_URL, timeout_seconds=1, retry_backoff_seconds=0)
+    sender = DiscordWebhookSender(
+        VALID_URL,
+        timeout_seconds=1,
+        max_retries=2,
+        retry_backoff_seconds=0,
+    )
     transport = httpx.MockTransport(handler)
 
     async def run():
@@ -119,3 +281,36 @@ def test_send_message_retries_on_5xx_then_gives_up():
 
     with pytest.raises(WebhookError, match="status 503"):
         asyncio.run(run())
+    assert counter["calls"] == 3
+
+
+def test_send_message_uses_exponential_backoff_for_5xx(monkeypatch):
+    counter = {"calls": 0}
+    delays: list[float] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        counter["calls"] += 1
+        if counter["calls"] <= 3:
+            return httpx.Response(503)
+        return httpx.Response(204)
+
+    async def record_sleep(delay: float) -> None:
+        delays.append(delay)
+
+    monkeypatch.setattr("bot.webhook_sender.asyncio.sleep", record_sleep)
+    sender = DiscordWebhookSender(
+        VALID_URL,
+        timeout_seconds=1,
+        max_retries=3,
+        retry_backoff_seconds=1,
+    )
+    transport = httpx.MockTransport(handler)
+
+    async def run():
+        async with httpx.AsyncClient(transport=transport) as client:
+            await sender._post_with_retries(client, {"content": "hi"})
+
+    asyncio.run(run())
+
+    assert counter["calls"] == 4
+    assert delays == [1, 2, 4]

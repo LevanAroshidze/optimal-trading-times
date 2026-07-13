@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -29,6 +30,8 @@ logger = logging.getLogger(__name__)
 
 _WEEKEND_DAYS = {"SAT", "SUN"}
 _WEEKLY_NO_DATA_RETRY_AFTER = timedelta(hours=1)
+_CACHE_FUTURE_TOLERANCE = timedelta(minutes=5)
+_MAX_SOURCE_RETRY_AFTER_SECONDS = 86_400.0
 
 
 class TradingCalendarNotifier:
@@ -58,7 +61,10 @@ class TradingCalendarNotifier:
         now: datetime | None = None,
         target_date_override: date | None = None,
     ) -> list[str | WebhookPayload]:
-        now = now or datetime.now(tz=UTC)
+        if now is None:
+            now = datetime.now(tz=UTC)
+        elif now.tzinfo is None or now.utcoffset() is None:
+            raise ValueError("now must be timezone-aware")
         sent_messages: list[str | WebhookPayload] = []
 
         lock = self.state_store.lock()
@@ -156,8 +162,11 @@ class TradingCalendarNotifier:
 
             todays_outlook = None
             if daily_due:
+                daily_source_status = self._source_status_for_target(
+                    source_status, events, daily_target
+                )
                 todays_outlook = self.summary_service.build_outlook_for_date(
-                    daily_target, events, source_status
+                    daily_target, events, daily_source_status
                 )
                 daily_message = self.formatter.format_daily(todays_outlook)
                 fingerprint = self.summary_service.daily_fingerprint(todays_outlook)
@@ -227,14 +236,17 @@ class TradingCalendarNotifier:
                         state_was_saved = True
 
             if recheck_due:
+                recheck_source_status = self._source_status_for_target(
+                    source_status, events, recheck_target
+                )
                 if todays_outlook is None or todays_outlook.target_date != recheck_target:
                     todays_outlook = self.summary_service.build_outlook_for_date(
-                        recheck_target, events, source_status
+                        recheck_target, events, recheck_source_status
                     )
                 baseline = state.daily
                 if daily_due and daily_key != recheck_key:
                     baseline = previous_daily
-                if source_status == "unavailable":
+                if recheck_source_status == "unavailable":
                     logger.info("recheck_skipped reason=source_unavailable")
                 elif not baseline.fingerprint:
                     logger.info("recheck_skipped reason=no_baseline_fingerprint")
@@ -414,17 +426,49 @@ class TradingCalendarNotifier:
             return None
         if fetched_at.tzinfo is None:
             return None
+        age = now.astimezone(UTC) - fetched_at.astimezone(UTC)
+        if age < -_CACHE_FUTURE_TOLERANCE:
+            logger.warning(
+                "cached_calendar_rejected reason=fetched_at_in_future fetched_at=%s",
+                cache.fetched_at,
+            )
+            return None
         max_age = timedelta(hours=self.app_config.policy.calendar_cache_max_age_hours)
-        if now.astimezone(UTC) - fetched_at.astimezone(UTC) > max_age:
+        if age > max_age:
             return None
         return list(cache.events)
+
+    def _source_status_for_target(
+        self, source_status: SourceStatus, events: list, target_date: date
+    ) -> SourceStatus:
+        if source_status == "unavailable":
+            return source_status
+        week_start = target_date - timedelta(days=target_date.weekday())
+        week_end = week_start + timedelta(days=7)
+        market_tz = ZoneInfo(self.app_config.calendar.market_timezone)
+        if any(
+            week_start <= event.starts_at.astimezone(market_tz).date() < week_end
+            for event in events
+        ):
+            return source_status
+        logger.warning(
+            "calendar_events_rejected reason=target_week_missing "
+            "source_status=%s target_date=%s",
+            source_status,
+            target_date,
+        )
+        return "unavailable"
 
     def _source_retry_after(
         self, now: datetime, error: CalendarSourceError
     ) -> str | None:
         if error.retry_after_seconds is None:
             return None
-        retry_at = now.astimezone(UTC) + timedelta(seconds=error.retry_after_seconds)
+        retry_after = error.retry_after_seconds
+        if not math.isfinite(retry_after) or retry_after <= 0:
+            return None
+        retry_after = min(retry_after, _MAX_SOURCE_RETRY_AFTER_SECONDS)
+        retry_at = now.astimezone(UTC) + timedelta(seconds=retry_after)
         return retry_at.isoformat()
 
     def _weekly_retry_after_active(
@@ -547,7 +591,12 @@ class TradingCalendarNotifier:
         try:
             await self.sender.send_message(message)
         except WebhookError as error:
-            logger.error("webhook_send_failed kind=%s error=%s", kind, error)
+            logger.error(
+                "webhook_send_failed kind=%s marker=%s error=%s",
+                kind,
+                marker,
+                error,
+            )
             raise
 
         sent_messages.append(message)
@@ -555,7 +604,9 @@ class TradingCalendarNotifier:
         if marker is not None:
             state.operations.pending_posts.pop(marker, None)
         self.state_store.save(state)
-        logger.info("posted kind=%s length=%s", kind, message_length)
+        logger.info(
+            "posted kind=%s marker=%s length=%s", kind, marker, message_length
+        )
 
     @staticmethod
     def _apply_state_update(

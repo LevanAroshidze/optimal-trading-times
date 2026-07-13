@@ -25,9 +25,13 @@ title_aliases:
   POWELL:
     - fed chair warsh speaks
     - fed chairman warsh speaks
+    - fed chair warsh testifies
+    - fed chairman warsh testifies
   POWELL_PM:
     - fed chair warsh speaks
     - fed chairman warsh speaks
+    - fed chair warsh testifies
+    - fed chairman warsh testifies
   FOMC:
     - federal funds rate
     - fomc statement
@@ -36,6 +40,8 @@ title_aliases:
     - fomc statement
     - fed chair warsh speaks
     - fed chairman warsh speaks
+    - fed chair warsh testifies
+    - fed chairman warsh testifies
   RED_830AM:
     - core retail sales
     - retail sales

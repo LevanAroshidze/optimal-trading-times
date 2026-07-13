@@ -59,7 +59,7 @@ These categories can drive the strongest calendar rules:
 | CPI | `cpi`, `consumer price index` |
 | PPI | `ppi`, `producer price index` |
 | FOMC | `federal funds rate`, `fomc statement` |
-| POWELL | `fed chair warsh speaks`, `fed chairman warsh speaks` |
+| POWELL | `fed chair warsh speaks`, `fed chairman warsh speaks`, `fed chair warsh testifies`, `fed chairman warsh testifies` |
 
 Important NFP detail:
 
@@ -99,6 +99,8 @@ The PM red-news rule can trigger when a high-impact USD event after 14:00 New Yo
 - `fomc statement`
 - `fed chair warsh speaks`
 - `fed chairman warsh speaks`
+- `fed chair warsh testifies`
+- `fed chairman warsh testifies`
 
 ## 6. Current Rule Matrix
 
