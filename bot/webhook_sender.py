@@ -23,7 +23,7 @@ _MAX_RETRIES = 5
 
 
 class WebhookError(RuntimeError):
-    """Raised when the Discord webhook ultimately rejects a payload."""
+    """Raised when Discord delivery fails or cannot be confirmed."""
 
 
 @dataclass(frozen=True)
@@ -137,6 +137,16 @@ class DiscordWebhookSender:
                     json=payload,
                 )
             except httpx.RequestError as error:
+                # Webhook POSTs create messages. Only retry failures known to
+                # precede sending the request; a lost response may hide success.
+                if not isinstance(
+                    error, (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)
+                ):
+                    raise WebhookError(
+                        "Discord webhook delivery is unconfirmed after "
+                        f"{type(error).__name__}; not retrying to avoid a duplicate. "
+                        "Check Discord before forcing a repost."
+                    ) from error
                 if attempt >= max_attempts:
                     raise WebhookError(
                         "Failed to send Discord webhook message after "
@@ -177,17 +187,13 @@ class DiscordWebhookSender:
                 await asyncio.sleep(retry_after)
                 continue
 
-            if 500 <= status < 600 and attempt < max_attempts:
-                backoff = self._backoff_for_attempt(attempt)
-                logger.warning(
-                    "discord_server_error status=%s attempt=%s/%s retry_in=%.2fs",
-                    status,
-                    attempt,
-                    max_attempts,
-                    backoff,
+            if 500 <= status < 600:
+                # A server/proxy error can arrive after the message was created.
+                raise WebhookError(
+                    "Discord webhook delivery is unconfirmed after "
+                    f"HTTP status {status}; not retrying to avoid a duplicate. "
+                    "Check Discord before forcing a repost."
                 )
-                await asyncio.sleep(backoff)
-                continue
 
             raise WebhookError(
                 f"Discord webhook rejected the message with status {status}."

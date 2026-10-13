@@ -2,6 +2,7 @@ import asyncio
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 
+import httpx
 import pytest
 
 from bot.calendar_source import CalendarSourceError
@@ -724,6 +725,83 @@ def test_webhook_failure_retains_pending_marker_and_propagates(tmp_path):
 
     state = state_store.load()
     assert state.daily.posted_for_date is None
+    assert "daily:2026-04-16" in state.operations.pending_posts
+
+
+@pytest.mark.parametrize("failure", ["read_timeout", "response_body_timeout", "server_error"])
+def test_created_message_with_lost_confirmation_is_not_reposted(
+    tmp_path, monkeypatch, caplog, failure
+):
+    created_messages: list[bytes] = []
+    state_path = tmp_path / "state.json"
+    state_store = StateStore(state_path)
+
+    class TimedOutBody(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield b'{"id":'
+            raise httpx.ReadTimeout("response body timed out")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert "daily:2026-04-16" in state_store.load().operations.pending_posts
+        # Discord commits the message before its confirmation is lost.
+        created_messages.append(request.content)
+        if len(created_messages) == 1:
+            if failure == "read_timeout":
+                raise httpx.ReadTimeout("confirmation lost", request=request)
+            if failure == "response_body_timeout":
+                return httpx.Response(200, stream=TimedOutBody())
+            return httpx.Response(504)
+        return httpx.Response(200, json={"id": "duplicate"})
+
+    original_client = httpx.AsyncClient
+
+    def mock_client(**kwargs):
+        return original_client(transport=httpx.MockTransport(handler), **kwargs)
+
+    monkeypatch.setattr("bot.webhook_sender.httpx.AsyncClient", mock_client)
+    ops_sender = FakeSender()
+
+    def make_notifier(target_date=date(2026, 4, 16)):
+        return TradingCalendarNotifier(
+            app_config=make_app_config(str(state_path)),
+            summary_service=FakeSummaryService([make_outlook(target_date=target_date)]),
+            formatter=DiscordFormatter(),
+            sender=DiscordWebhookSender(
+                "https://discord.com/api/webhooks/123456789012345678/abcDEFghi-_JKL",
+                retry_backoff_seconds=0,
+            ),
+            ops_sender=ops_sender,
+            state_store=StateStore(state_path),
+        )
+
+    caplog.set_level("INFO", logger="bot.notifier")
+    with pytest.raises(WebhookError, match="delivery is unconfirmed"):
+        asyncio.run(make_notifier().run_once(datetime(2026, 4, 16, 5, 0, tzinfo=UTC)))
+
+    state = state_store.load()
+    assert len(created_messages) == 1
+    assert state.daily.posted_for_date is None
+    assert "daily:2026-04-16" in state.operations.pending_posts
+    assert not any(record.message.startswith("posted kind=") for record in caplog.records)
+
+    # A fresh notifier represents subsequent cron processes reading persisted state.
+    for minute in (15, 30):
+        assert asyncio.run(
+            make_notifier().run_once(datetime(2026, 4, 16, 5, minute, tzinfo=UTC))
+        ) == []
+    assert len(created_messages) == 1
+    assert len(ops_sender.messages) == 1
+    assert "Pending Discord post needs review" in ops_sender.messages[0]
+
+    # The unresolved marker belongs to one date; tomorrow must still post normally.
+    next_day = make_notifier(date(2026, 4, 17))
+    assert len(asyncio.run(
+        next_day.run_once(datetime(2026, 4, 17, 5, 0, tzinfo=UTC))
+    )) == 1
+    state = state_store.load()
+    assert len(created_messages) == 2
+    assert state.daily.posted_for_date == "2026-04-17"
+    assert "daily:2026-04-17" not in state.operations.pending_posts
     assert "daily:2026-04-16" in state.operations.pending_posts
 
 

@@ -191,13 +191,16 @@ def test_retry_after_rejects_nonfinite_or_negative_values(response):
     assert DiscordWebhookSender._parse_retry_after(response) == 1.0
 
 
-def test_send_message_retries_read_timeout_then_succeeds():
+@pytest.mark.parametrize(
+    "error_type", [httpx.ConnectTimeout, httpx.ConnectError, httpx.PoolTimeout]
+)
+def test_send_message_retries_before_request_is_sent(error_type):
     counter = {"calls": 0}
 
     def handler(request: httpx.Request) -> httpx.Response:
         counter["calls"] += 1
         if counter["calls"] == 1:
-            raise httpx.ReadTimeout("response timed out", request=request)
+            raise error_type("request not sent", request=request)
         return httpx.Response(204)
 
     sender = DiscordWebhookSender(
@@ -215,12 +218,45 @@ def test_send_message_retries_read_timeout_then_succeeds():
     assert counter["calls"] == 2
 
 
-def test_send_message_persistent_request_error_exhausts_configured_retries():
+@pytest.mark.parametrize(
+    "error_type",
+    [
+        httpx.ReadTimeout,
+        httpx.ReadError,
+        httpx.WriteTimeout,
+        httpx.WriteError,
+        httpx.RemoteProtocolError,
+        httpx.RequestError,
+    ],
+)
+def test_send_message_does_not_retry_uncertain_delivery(error_type):
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        if len(calls) == 1:
+            raise error_type("delivery result unknown", request=request)
+        return httpx.Response(200, json={"id": "duplicate"})
+
+    sender = DiscordWebhookSender(VALID_URL, retry_backoff_seconds=0)
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            await sender._post_with_retries(client, {"content": "hi"})
+
+    with pytest.raises(WebhookError, match="delivery is unconfirmed") as exc_info:
+        asyncio.run(run())
+
+    assert len(calls) == 1
+    assert isinstance(exc_info.value.__cause__, error_type)
+
+
+def test_send_message_persistent_connect_error_exhausts_configured_retries():
     counter = {"calls": 0}
 
     def handler(request: httpx.Request) -> httpx.Response:
         counter["calls"] += 1
-        raise httpx.ReadTimeout("response timed out", request=request)
+        raise httpx.ConnectError("connection failed", request=request)
 
     sender = DiscordWebhookSender(
         VALID_URL,
@@ -238,7 +274,32 @@ def test_send_message_persistent_request_error_exhausts_configured_retries():
         asyncio.run(run())
 
     assert counter["calls"] == 4
-    assert isinstance(exc_info.value.__cause__, httpx.ReadTimeout)
+    assert isinstance(exc_info.value.__cause__, httpx.ConnectError)
+
+
+@pytest.mark.parametrize("first_failure", ["connect_error", "rate_limit"])
+def test_safe_retry_stops_as_soon_as_delivery_becomes_uncertain(first_failure):
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        if len(calls) == 1:
+            if first_failure == "connect_error":
+                raise httpx.ConnectError("connection failed", request=request)
+            return httpx.Response(429, headers={"Retry-After": "0"})
+        if len(calls) == 2:
+            raise httpx.ReadTimeout("confirmation lost", request=request)
+        return httpx.Response(200, json={"id": "duplicate"})
+
+    sender = DiscordWebhookSender(VALID_URL, retry_backoff_seconds=0)
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            await sender._post_with_retries(client, {"content": "hi"})
+
+    with pytest.raises(WebhookError, match="delivery is unconfirmed"):
+        asyncio.run(run())
+    assert len(calls) == 2
 
 
 def test_send_message_raises_on_4xx_other_than_429():
@@ -260,12 +321,13 @@ def test_send_message_raises_on_4xx_other_than_429():
     assert counter["calls"] == 1
 
 
-def test_send_message_retries_on_5xx_then_gives_up():
+@pytest.mark.parametrize("status", [500, 502, 503, 504])
+def test_send_message_does_not_retry_uncertain_server_error(status):
     counter = {"calls": 0}
 
     def handler(request: httpx.Request) -> httpx.Response:
         counter["calls"] += 1
-        return httpx.Response(503)
+        return httpx.Response(status)
 
     sender = DiscordWebhookSender(
         VALID_URL,
@@ -279,19 +341,19 @@ def test_send_message_retries_on_5xx_then_gives_up():
         async with httpx.AsyncClient(transport=transport) as client:
             await sender._post_with_retries(client, {"content": "hi"})
 
-    with pytest.raises(WebhookError, match="status 503"):
+    with pytest.raises(WebhookError, match=f"delivery is unconfirmed.*status {status}"):
         asyncio.run(run())
-    assert counter["calls"] == 3
+    assert counter["calls"] == 1
 
 
-def test_send_message_uses_exponential_backoff_for_5xx(monkeypatch):
+def test_send_message_uses_exponential_backoff_for_connect_errors(monkeypatch):
     counter = {"calls": 0}
     delays: list[float] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         counter["calls"] += 1
         if counter["calls"] <= 3:
-            return httpx.Response(503)
+            raise httpx.ConnectError("connection failed", request=request)
         return httpx.Response(204)
 
     async def record_sleep(delay: float) -> None:

@@ -123,7 +123,9 @@ The bot stores last-known-good calendar events in `data/state.json` and can use 
 If the default weekly JSON feed does not contain the coming week by the Sunday `21:00 Asia/Tbilisi` outlook slot, the bot fetches the Forex Factory target-week calendar page and uses that export instead.
 If `DISCORD_OPS_WEBHOOK_URL` is set, limited ops-only alerts are sent for repeated source failures, weekly no-data skips, and state-lock recovery/failure.
 
-Discord delivery uses independent `delivery.timeout_seconds`, `delivery.max_retries`, and `delivery.retry_backoff_seconds` settings. Timeouts are capped at 60 seconds, configured retries at five, and base backoff at 10 seconds so a bad configuration cannot hold the Railway cron indefinitely. Each request asks Discord to wait for message creation confirmation and suppresses all allowed mentions. Transport failures and `5xx` responses use bounded retries; a long `429` delay fails the cron visibly instead of holding the state lock across later Railway invocations.
+Discord delivery uses independent `delivery.timeout_seconds`, `delivery.max_retries`, and `delivery.retry_backoff_seconds` settings. Timeouts are capped at 60 seconds, configured retries at five, and base backoff at 10 seconds so a bad configuration cannot hold the Railway cron indefinitely. Each request asks Discord to wait for message creation confirmation and suppresses all allowed mentions. Only connection failures, connection timeouts, pool timeouts, and short `429` rate limits use bounded retries; a long `429` delay fails the cron visibly instead of holding the state lock across later Railway invocations.
+
+Read/write failures, other request errors, and `5xx` responses leave delivery unconfirmed: Discord may already have created the message, so the sender does not retry. The cron fails visibly and retains its pending marker, blocking automatic reposts on later runs. A later run alerts `DISCORD_OPS_WEBHOOK_URL` once if configured. Check Discord and the pending state before forcing a repost. This favors avoiding duplicates; an unconfirmed message that never reached Discord requires manual recovery.
 
 ## Tests, lint, types
 
